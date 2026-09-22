@@ -27,12 +27,23 @@ use wry::{
 };
 
 #[cfg(windows)]
+use update_via_github::{UpdateConfig, UpdateManager, UpdateStatus};
+#[cfg(windows)]
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
 const APP_NAME: &str = "Windows 3D Viewer";
 const APP_EXE_NAME: &str = "windows-3d-viewer.exe";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+const UPDATE_REPOSITORY: &str = "emadgh/windows-3d-viewer";
+const UPDATE_CHECKSUM_ASSET: &str = "windows-3d-viewer.exe.sha256";
 const FILE_CHUNK_BYTES: usize = 6000;
+
+#[cfg(windows)]
+type AppUpdater = UpdateManager;
+
+#[cfg(not(windows))]
+#[derive(Clone, Debug)]
+struct AppUpdater;
 
 const SUPPORTED_EXTENSIONS: &[(&str, &str)] = &[
     (".glb", "GLB"),
@@ -398,8 +409,124 @@ fn open_default_apps() -> Result<(), String> {
         .map_err(|error| format!("Could not open Windows Default Apps: {error}"))
 }
 
+#[cfg(windows)]
+fn build_updater() -> AppUpdater {
+    let config = UpdateConfig::new(UPDATE_REPOSITORY, APP_EXE_NAME, APP_VERSION)
+        .with_app_name(APP_NAME)
+        .with_checksum_asset(UPDATE_CHECKSUM_ASSET)
+        .with_required_checksum(true)
+        .with_max_download_size(128 * 1024 * 1024)
+        .with_min_executable_size(500_000);
+    UpdateManager::new(config)
+}
+
+#[cfg(not(windows))]
+fn build_updater() -> AppUpdater {
+    AppUpdater
+}
+
+#[cfg(windows)]
+fn start_initial_update_check(updater: &AppUpdater) {
+    let _ = updater.start_check(false);
+}
+
+#[cfg(not(windows))]
+fn start_initial_update_check(_updater: &AppUpdater) {}
+
+#[cfg(windows)]
+fn update_status_json(updater: &AppUpdater) -> Value {
+    match updater.status() {
+        UpdateStatus::Idle => json!({
+            "state": "idle",
+            "currentVersion": APP_VERSION,
+        }),
+        UpdateStatus::Checking => json!({
+            "state": "checking",
+            "currentVersion": APP_VERSION,
+        }),
+        UpdateStatus::UpToDate => json!({
+            "state": "up-to-date",
+            "currentVersion": APP_VERSION,
+        }),
+        UpdateStatus::Available(info) => json!({
+            "state": "available",
+            "currentVersion": APP_VERSION,
+            "latestVersion": info.version,
+            "releaseUrl": info.release_url,
+        }),
+        UpdateStatus::Downloading { info, downloaded, total } => json!({
+            "state": "downloading",
+            "currentVersion": APP_VERSION,
+            "latestVersion": info.version,
+            "releaseUrl": info.release_url,
+            "downloaded": downloaded,
+            "total": total,
+        }),
+        UpdateStatus::Ready(info, _) => json!({
+            "state": "ready",
+            "currentVersion": APP_VERSION,
+            "latestVersion": info.version,
+            "releaseUrl": info.release_url,
+        }),
+        UpdateStatus::Failed(message) => json!({
+            "state": "failed",
+            "currentVersion": APP_VERSION,
+            "message": message,
+        }),
+    }
+}
+
+#[cfg(not(windows))]
+fn update_status_json(_updater: &AppUpdater) -> Value {
+    json!({
+        "state": "unsupported",
+        "currentVersion": APP_VERSION,
+        "message": "Automatic updates are available only in the packaged Windows application.",
+    })
+}
+
+#[cfg(windows)]
+fn dispatch_updater_command(updater: &AppUpdater, command: &str) -> Result<Value, String> {
+    match command {
+        "app.getUpdateStatus" => Ok(update_status_json(updater)),
+        "app.checkForUpdates" => {
+            let _ = updater.start_check(false);
+            Ok(update_status_json(updater))
+        }
+        "app.downloadUpdate" => {
+            let _ = updater.start_download();
+            Ok(update_status_json(updater))
+        }
+        "app.applyUpdate" => {
+            if !updater.apply_ready()? {
+                return Err("No downloaded update is ready to install.".to_string());
+            }
+
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(350));
+                std::process::exit(0);
+            });
+
+            Ok(json!({
+                "applying": true,
+                "currentVersion": APP_VERSION,
+            }))
+        }
+        _ => Err(format!("Unknown updater command: {command}")),
+    }
+}
+
+#[cfg(not(windows))]
+fn dispatch_updater_command(_updater: &AppUpdater, command: &str) -> Result<Value, String> {
+    match command {
+        "app.getUpdateStatus" => Ok(update_status_json(_updater)),
+        _ => Err("Automatic updates are supported only on Windows.".to_string()),
+    }
+}
+
 fn dispatch_bridge(
     launch_state: &mut Option<LaunchState>,
+    updater: &AppUpdater,
     request: &BridgeRequest,
 ) -> Result<Value, String> {
     match request.command.as_str() {
@@ -414,6 +541,9 @@ fn dispatch_bridge(
         "app.openDefaultApps" => {
             open_default_apps()?;
             Ok(json!({ "opened": true }))
+        }
+        "app.getUpdateStatus" | "app.checkForUpdates" | "app.downloadUpdate" | "app.applyUpdate" => {
+            dispatch_updater_command(updater, request.command.as_str())
         }
         "app.getLaunchManifest" => Ok(launch_state
             .as_ref()
@@ -433,14 +563,18 @@ fn dispatch_bridge(
     }
 }
 
-fn bridge_response_script(launch_state: &mut Option<LaunchState>, raw: &str) -> String {
+fn bridge_response_script(
+    launch_state: &mut Option<LaunchState>,
+    updater: &AppUpdater,
+    raw: &str,
+) -> String {
     let request: BridgeRequest = match serde_json::from_str(raw) {
         Ok(request) => request,
         Err(_) => return String::new(),
     };
 
     let id = serde_json::to_string(&request.id).unwrap_or_else(|_| "\"\"".to_string());
-    match dispatch_bridge(launch_state, &request) {
+    match dispatch_bridge(launch_state, updater, &request) {
         Ok(value) => {
             let value = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
             format!("window.__w3dvResolve({id}, true, {value});")
@@ -495,6 +629,8 @@ fn run_app() -> Result<(), Box<dyn Error>> {
 
     let webview = builder.build(&window)?;
     let mut launch_state = build_launch_state();
+    let updater = build_updater();
+    start_initial_update_check(&updater);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -502,7 +638,7 @@ fn run_app() -> Result<(), Box<dyn Error>> {
 
         match event {
             Event::UserEvent(UserEvent::Bridge(raw)) => {
-                let script = bridge_response_script(&mut launch_state, &raw);
+                let script = bridge_response_script(&mut launch_state, &updater, &raw);
                 if !script.is_empty() {
                     let _ = webview.evaluate_script(&script);
                 }
