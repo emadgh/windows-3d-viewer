@@ -12,6 +12,7 @@ const bridge_origins = [_][]const u8{
 const bridge_policies = [_]native_sdk.BridgeCommandPolicy{
     .{ .name = "app.registerFileAssociations", .origins = &bridge_origins },
     .{ .name = "app.openDefaultApps", .origins = &bridge_origins },
+    .{ .name = "app.consumeLaunchRequest", .origins = &bridge_origins },
 };
 
 const register_associations_script =
@@ -19,6 +20,11 @@ const register_associations_script =
     \\$parentPid = (Get-CimInstance Win32_Process -Filter ("ProcessId=" + $PID)).ParentProcessId
     \\$exe = (Get-Process -Id $parentPid -ErrorAction Stop).Path
     \\if ([string]::IsNullOrWhiteSpace($exe)) { throw 'Could not resolve application executable path.' }
+    \\$binDir = Split-Path -Parent $exe
+    \\$packageRoot = Split-Path -Parent $binDir
+    \\$launcher = Join-Path $packageRoot 'open-model.ps1'
+    \\if (-not (Test-Path -LiteralPath $launcher)) { throw ('File association launcher is missing: ' + $launcher) }
+    \\$launchCommand = ('powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" "%1"' -f $launcher)
     \\$appName = 'Windows 3D Viewer'
     \\$capRelative = 'Software\\EmadGH\\Windows3DViewer\\Capabilities'
     \\$capPath = 'HKCU:\\' + $capRelative
@@ -38,7 +44,7 @@ const register_associations_script =
     \\New-ItemProperty -Path $applicationKey -Name 'FriendlyAppName' -Value $appName -PropertyType String -Force | Out-Null
     \\$applicationCommand = Join-Path $applicationKey 'shell\\open\\command'
     \\New-Item -Path $applicationCommand -Force | Out-Null
-    \\Set-Item -Path $applicationCommand -Value ('"{0}" "%1"' -f $exe)
+    \\Set-Item -Path $applicationCommand -Value $launchCommand
     \\$supportedTypes = Join-Path $applicationKey 'SupportedTypes'
     \\New-Item -Path $supportedTypes -Force | Out-Null
     \\foreach ($ext in $extensions) {
@@ -53,7 +59,7 @@ const register_associations_script =
     \\    Set-Item -Path $iconKey -Value ('"{0}",0' -f $exe)
     \\    $commandKey = Join-Path $progKey 'shell\\open\\command'
     \\    New-Item -Path $commandKey -Force | Out-Null
-    \\    Set-Item -Path $commandKey -Value ('"{0}" "%1"' -f $exe)
+    \\    Set-Item -Path $commandKey -Value $launchCommand
     \\    $openWith = Join-Path $classes ($ext + '\\OpenWithProgids')
     \\    New-Item -Path $openWith -Force | Out-Null
     \\    New-ItemProperty -Path $openWith -Name $progId -Value '' -PropertyType String -Force | Out-Null
@@ -68,11 +74,20 @@ const open_default_apps_script =
     \\try { Start-Process $uri -ErrorAction Stop } catch { Start-Process 'ms-settings:defaultapps' -ErrorAction Stop }
 ;
 
+const consume_launch_request_script =
+    \\$ErrorActionPreference = 'Stop'
+    \\$parentPid = (Get-CimInstance Win32_Process -Filter ("ProcessId=" + $PID)).ParentProcessId
+    \\$exe = (Get-Process -Id $parentPid -ErrorAction Stop).Path
+    \\$packageRoot = Split-Path -Parent (Split-Path -Parent $exe)
+    \\$manifest = Join-Path $packageRoot 'resources\\frontend\\dist\\__open__\\launch.json'
+    \\if (Test-Path -LiteralPath $manifest) { Remove-Item -LiteralPath $manifest -Force }
+;
+
 const ViewerApp = struct {
     env_map: *std.process.Environ.Map,
     allocator: std.mem.Allocator,
     io: std.Io,
-    bridge_handlers: [2]native_sdk.BridgeHandler = undefined,
+    bridge_handlers: [3]native_sdk.BridgeHandler = undefined,
 
     fn app(self: *@This()) native_sdk.App {
         return .{
@@ -95,6 +110,7 @@ const ViewerApp = struct {
         self.bridge_handlers = .{
             .{ .name = "app.registerFileAssociations", .context = self, .invoke_fn = registerFileAssociations },
             .{ .name = "app.openDefaultApps", .context = self, .invoke_fn = openDefaultApps },
+            .{ .name = "app.consumeLaunchRequest", .context = self, .invoke_fn = consumeLaunchRequest },
         };
         return .{
             .policy = .{ .enabled = true, .commands = &bridge_policies },
@@ -142,6 +158,14 @@ const ViewerApp = struct {
         const self: *@This() = @ptrCast(@alignCast(context));
         try self.runPowerShell(open_default_apps_script);
         return "{\"opened\":true}";
+    }
+
+    fn consumeLaunchRequest(context: *anyopaque, invocation: native_sdk.bridge.Invocation, output: []u8) anyerror![]const u8 {
+        _ = invocation;
+        _ = output;
+        const self: *@This() = @ptrCast(@alignCast(context));
+        try self.runPowerShell(consume_launch_request_script);
+        return "{\"consumed\":true}";
     }
 };
 
