@@ -31,6 +31,7 @@
       <label class="toggle"><input id="autorotateToggle" type="checkbox" /> Auto rotate</label>
       <span class="spacer"></span>
       <button id="screenshotButton" title="Save viewport as PNG">Screenshot</button>
+      <button id="settingsButton" title="Application settings" aria-label="Application settings">Settings</button>
     </header>
 
     <main class="workspace">
@@ -94,6 +95,37 @@
       <span id="formatText">No file</span>
     </footer>
   </div>
+
+  <div id="settingsModal" class="modal-backdrop" hidden>
+    <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="settings-header">
+        <div>
+          <div class="settings-kicker">Application</div>
+          <h2 id="settingsTitle">Settings</h2>
+        </div>
+        <button id="closeSettingsButton" class="icon-button" aria-label="Close settings">×</button>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-copy">
+          <h3>Default 3D viewer</h3>
+          <p>Register Windows 3D Viewer for all supported model formats, then choose it as the default app in Windows Settings.</p>
+          <div class="format-chips" aria-label="Supported file associations">
+            <span>GLB</span><span>GLTF</span><span>FBX</span><span>OBJ</span><span>STL</span><span>PLY</span>
+            <span>DAE</span><span>3MF</span><span>3DS</span><span>USDZ</span><span>WRL</span><span>VRML</span>
+          </div>
+          <p class="settings-note">Windows 10/11 requires the final default-app choice to be confirmed by the user. The app does not modify the protected UserChoice registry key.</p>
+          <div class="settings-actions">
+            <button id="setDefaultButton" class="primary">Set as default…</button>
+            <button id="openDefaultAppsButton">Open Default Apps</button>
+          </div>
+          <div id="associationStatus" class="association-status" role="status" aria-live="polite"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
   <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/settings.js"></script>
 </body>
 </html>
