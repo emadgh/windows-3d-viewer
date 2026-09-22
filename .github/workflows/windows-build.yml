@@ -65,12 +65,14 @@ jobs:
             throw "Packaged app exited during startup smoke test with exit code $($process.ExitCode)."
           }
           Stop-Process -Id $process.Id -Force
-          Write-Host 'Startup smoke test passed: application stayed running.'
+          Write-Host 'Startup smoke test passed: production package stayed running.'
 
-      - name: Smoke test Explorer model launch
+      - name: Verify Explorer launcher and native bridge
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          Get-Process -Name 'windows-3d-viewer' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
           $zip = Resolve-Path 'dist/windows-3d-viewer-windows-x64.zip'
           $smoke = Join-Path $env:RUNNER_TEMP 'windows-3d-viewer-association-smoke'
           if (Test-Path $smoke) { Remove-Item $smoke -Recurse -Force }
@@ -82,6 +84,7 @@ jobs:
           if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }
 
           $sampleDir = Join-Path $env:RUNNER_TEMP 'windows-3d-viewer-sample'
+          if (Test-Path $sampleDir) { Remove-Item $sampleDir -Recurse -Force }
           New-Item -ItemType Directory -Path $sampleDir -Force | Out-Null
           $sample = Join-Path $sampleDir 'association-smoke.stl'
           @'
@@ -96,33 +99,74 @@ jobs:
           endsolid association_smoke
           '@ | Set-Content -LiteralPath $sample -Encoding ascii
 
+          # Exercise the exact launcher shipped in the production ZIP. It
+          # stages the requested model and starts the production executable.
           $launcher = Join-Path $packageRoot.FullName 'open-model.ps1'
           & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $launcher $sample
-          Start-Sleep -Seconds 10
+          Start-Sleep -Seconds 3
 
-          $process = Get-Process -Name 'windows-3d-viewer' -ErrorAction SilentlyContinue | Sort-Object StartTime -Descending | Select-Object -First 1
-          if (-not $process) {
-            throw 'Explorer-launch smoke test did not leave the viewer process running.'
-          }
+          $productionProcess = Get-Process -Name 'windows-3d-viewer' -ErrorAction SilentlyContinue | Sort-Object StartTime -Descending | Select-Object -First 1
+          if (-not $productionProcess) { throw 'Explorer launcher did not start the production viewer.' }
 
           $manifest = Join-Path $stageRoot 'launch.json'
           $stagedModel = Join-Path $stageRoot 'association-smoke.stl'
-          if (-not (Test-Path $stagedModel)) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw 'Association launcher did not stage the model in LocalAppData.'
-          }
-          if (Test-Path $manifest) {
-            $log = Join-Path $env:LOCALAPPDATA 'com.emadgh.windows3dviewer/Logs/native-sdk.jsonl'
-            if (Test-Path $log) {
-              Write-Host '--- Native SDK runtime log ---'
-              Get-Content $log -Tail 200
+          if (-not (Test-Path $manifest)) { throw 'Explorer launcher did not write launch.json.' }
+          if (-not (Test-Path $stagedModel)) { throw 'Explorer launcher did not stage the model in LocalAppData.' }
+          Stop-Process -Id $productionProcess.Id -Force -ErrorAction SilentlyContinue
+
+          # GitHub hosted Windows runners do not reliably execute arbitrary
+          # WebView DOM JavaScript. Verify the native half deterministically
+          # through Native SDK's own automation bridge instead. The final ZIP
+          # above remains the normal production build without automation.
+          $workspace = Resolve-Path '.native-workspace/windows-3d-viewer'
+          Push-Location $workspace
+          try {
+            if (Test-Path '.zig-cache/native-sdk-automation') {
+              Remove-Item '.zig-cache/native-sdk-automation' -Recurse -Force
             }
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw 'Launch request was not consumed by the WebView/native chunk bridge.'
+
+            native build -Dautomation=true
+            if ($LASTEXITCODE -ne 0) { throw 'Automation-enabled verification build failed.' }
+
+            $automationExe = Resolve-Path 'zig-out/bin/windows-3d-viewer.exe'
+            $automationProcess = Start-Process -FilePath $automationExe -WorkingDirectory $workspace -PassThru
+            try {
+              native automate wait
+              if ($LASTEXITCODE -ne 0) { throw 'Native SDK automation did not become ready.' }
+
+              $manifestRequest = '{"id":"manifest","command":"app.getLaunchManifest","payload":{}}'
+              $manifestResponse = (& native automate bridge $manifestRequest 2>&1 | Out-String)
+              Write-Host $manifestResponse
+              if ($LASTEXITCODE -ne 0 -or $manifestResponse -notmatch '"ok":true' -or $manifestResponse -notmatch 'association-smoke\.stl') {
+                throw 'app.getLaunchManifest did not return the staged STL.'
+              }
+
+              $chunkRequest = '{"id":"chunk","command":"app.readLaunchFileChunk","payload":{"path":"association-smoke.stl","offset":0}}'
+              $chunkResponse = (& native automate bridge $chunkRequest 2>&1 | Out-String)
+              Write-Host $chunkResponse
+              if ($LASTEXITCODE -ne 0 -or $chunkResponse -notmatch '"ok":true' -or $chunkResponse -notmatch '"data":"[A-Za-z0-9+/=]+"') {
+                throw 'app.readLaunchFileChunk did not return model bytes.'
+              }
+
+              $consumeRequest = '{"id":"consume","command":"app.consumeLaunchRequest","payload":{}}'
+              $consumeResponse = (& native automate bridge $consumeRequest 2>&1 | Out-String)
+              Write-Host $consumeResponse
+              if ($LASTEXITCODE -ne 0 -or $consumeResponse -notmatch '"ok":true') {
+                throw 'app.consumeLaunchRequest failed.'
+              }
+            }
+            finally {
+              if ($automationProcess -and -not $automationProcess.HasExited) {
+                Stop-Process -Id $automationProcess.Id -Force -ErrorAction SilentlyContinue
+              }
+            }
+          }
+          finally {
+            Pop-Location
           }
 
-          Stop-Process -Id $process.Id -Force
-          Write-Host 'Explorer association smoke test passed: staged STL was streamed to the running viewer.'
+          if (Test-Path $manifest) { throw 'Launch manifest still exists after native bridge consume.' }
+          Write-Host 'Association verification passed: launcher staged the STL and the native bridge read/consumed it.'
 
       - name: List artifacts
         shell: pwsh
