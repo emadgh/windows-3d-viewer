@@ -1,0 +1,109 @@
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 7, 11, .68);
+  backdrop-filter: blur(8px);
+}
+
+.modal-backdrop[hidden] { display: none; }
+
+.settings-dialog {
+  width: min(610px, calc(100vw - 48px));
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: auto;
+  border: 1px solid #374252;
+  border-radius: 14px;
+  background: #181e27;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, .48);
+  color: #e7edf5;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid #2d3642;
+}
+
+.settings-kicker {
+  margin-bottom: 2px;
+  color: #758296;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .8px;
+  text-transform: uppercase;
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.icon-button {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.settings-section { padding: 20px; }
+.settings-copy h3 { margin: 0 0 7px; font-size: 15px; }
+.settings-copy p { margin: 0; color: #a9b5c4; font-size: 12px; line-height: 1.55; }
+
+.format-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 14px 0;
+}
+
+.format-chips span {
+  padding: 4px 7px;
+  border: 1px solid #354153;
+  border-radius: 6px;
+  background: #202833;
+  color: #c5d0de;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .25px;
+}
+
+.settings-copy .settings-note {
+  padding: 10px 11px;
+  border: 1px solid #343e4d;
+  border-radius: 8px;
+  background: #141a22;
+  color: #8e9bab;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.association-status {
+  min-height: 18px;
+  margin-top: 10px;
+  color: #9db7e7;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.association-status.error { color: #ff9c9c; }
+
+@media (max-width: 620px) {
+  .modal-backdrop { padding: 12px; }
+  .settings-dialog { width: calc(100vw - 24px); }
+  .settings-actions { flex-direction: column; }
+}
