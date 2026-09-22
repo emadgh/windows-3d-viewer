@@ -21,6 +21,7 @@ winreg = "0.56.0"
 update-via-github = { git = "https://github.com/emadgh/update-via-github.git", rev = "ec648957782ab800e14ddc6e0a15c694a46f1252" }
 
 [build-dependencies]
+base64 = "0.22"
 winres = "0.1.12"
 
 [profile.release]
