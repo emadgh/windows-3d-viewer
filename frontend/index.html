@@ -9,90 +9,143 @@
 <body>
   <div id="app">
     <header class="toolbar">
-      <div class="brand">3D Viewer</div>
-      <button id="openButton" class="primary">Open model</button>
-      <input id="fileInput" type="file" hidden multiple accept=".glb,.gltf,.fbx,.obj,.mtl,.stl,.ply,.dae,.3mf,.3ds,.usdz,.wrl,.vrml,.bin,.png,.jpg,.jpeg,.webp,.bmp,.tga,.dds,.ktx2" />
-      <button id="fitButton" title="Fit model in view">Fit</button>
-      <button id="resetButton" title="Reset camera">Reset</button>
-      <span class="separator"></span>
-      <label class="control-label">Mode
-        <select id="modeSelect">
-          <option value="textured-lighting">Textured + Lighting</option>
-          <option value="textured">Textured</option>
-          <option value="clay">Clay</option>
-          <option value="wireframe">Wireframe</option>
-        </select>
-      </label>
-      <label class="toggle"><input id="lightingToggle" type="checkbox" checked /> Lighting</label>
-      <label class="toggle"><input id="shadowsToggle" type="checkbox" checked /> Shadows</label>
-      <label class="toggle"><input id="wireToggle" type="checkbox" /> Wire overlay</label>
-      <label class="toggle"><input id="gridToggle" type="checkbox" checked /> Grid</label>
-      <label class="toggle"><input id="axesToggle" type="checkbox" /> Axes</label>
-      <label class="toggle"><input id="autorotateToggle" type="checkbox" /> Auto rotate</label>
+      <div class="brand" aria-label="Windows 3D Viewer">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 2.9 20 7.5v9L12 21.1 4 16.5v-9L12 2.9Zm0 2.3L6.1 8.6v6.8l5.9 3.4 5.9-3.4V8.6L12 5.2Zm0 2.2 4 2.3v4.6l-4 2.3-4-2.3V9.7l4-2.3Z"/></svg>
+        </span>
+        <span class="brand-copy">
+          <strong>3D Viewer</strong>
+          <span>Windows</span>
+        </span>
+      </div>
+
+      <div class="toolbar-group toolbar-main-actions">
+        <button id="openButton" class="primary toolbar-button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h6l1.7 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-10a2 2 0 0 1 2-2Zm0 2v10h16v-8h-9.2L9.1 7.5H4Z"/></svg>
+          <span>Open</span>
+        </button>
+        <input id="fileInput" type="file" hidden multiple accept=".glb,.gltf,.fbx,.obj,.mtl,.stl,.ply,.dae,.3mf,.3ds,.usdz,.wrl,.vrml,.bin,.png,.jpg,.jpeg,.webp,.bmp,.tga,.dds,.ktx2" />
+        <button id="fitButton" class="toolbar-button icon-text-button" title="Fit model in view">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5v2H6v3H4Zm11-5h5v5h-2V6h-3V4ZM6 15v3h3v2H4v-5h2Zm12 0h2v5h-5v-2h3v-3ZM8 8h8v8H8V8Zm2 2v4h4v-4h-4Z"/></svg>
+          <span>Fit</span>
+        </button>
+        <button id="resetButton" class="toolbar-button icon-text-button" title="Reset camera">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5a7 7 0 1 1-6.3 4H3l3.8-4L11 9H7.8A5 5 0 1 0 12 7V5Z"/></svg>
+          <span>Reset</span>
+        </button>
+      </div>
+
+      <div class="toolbar-divider" aria-hidden="true"></div>
+
+      <div class="toolbar-group view-controls">
+        <label class="control-label mode-control">
+          <span>View</span>
+          <select id="modeSelect">
+            <option value="textured-lighting">Textured + Lighting</option>
+            <option value="textured">Textured</option>
+            <option value="clay">Clay</option>
+            <option value="wireframe">Wireframe</option>
+          </select>
+        </label>
+
+        <label class="toggle" title="Toggle scene lighting"><input id="lightingToggle" type="checkbox" checked /><span class="switch"></span><span class="toggle-label">Light</span></label>
+        <label class="toggle" title="Toggle shadows"><input id="shadowsToggle" type="checkbox" checked /><span class="switch"></span><span class="toggle-label">Shadow</span></label>
+        <label class="toggle" title="Toggle wireframe overlay"><input id="wireToggle" type="checkbox" /><span class="switch"></span><span class="toggle-label">Wire</span></label>
+        <label class="toggle" title="Toggle ground grid"><input id="gridToggle" type="checkbox" checked /><span class="switch"></span><span class="toggle-label">Grid</span></label>
+        <label class="toggle compact-toggle" title="Toggle axes"><input id="axesToggle" type="checkbox" /><span class="switch"></span><span class="toggle-label">Axes</span></label>
+        <label class="toggle compact-toggle" title="Auto rotate model"><input id="autorotateToggle" type="checkbox" /><span class="switch"></span><span class="toggle-label">Rotate</span></label>
+      </div>
+
       <span class="spacer"></span>
-      <button id="screenshotButton" title="Save viewport as PNG">Screenshot</button>
-      <button id="settingsButton" title="Application settings" aria-label="Application settings">Settings</button>
+
+      <div class="toolbar-group toolbar-end-actions">
+        <button id="screenshotButton" class="toolbar-button icon-only-responsive" title="Save viewport as PNG">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.4 5 10 3h4l1.6 2H19a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3h3.4ZM5 7a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-4.4L13 5h-2l-1.6 2H5Zm7 2.2a3.8 3.8 0 1 1 0 7.6 3.8 3.8 0 0 1 0-7.6Zm0 2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6Z"/></svg>
+          <span>Capture</span>
+        </button>
+        <button id="settingsButton" class="toolbar-button icon-button-top" title="Application settings" aria-label="Application settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m13.9 2 .5 2a8.4 8.4 0 0 1 1.5.9l2-.6 1.8 3.1-1.5 1.4c.1.4.1.8.1 1.2s0 .8-.1 1.2l1.5 1.4-1.8 3.1-2-.6a8.4 8.4 0 0 1-1.5.9l-.5 2h-3.6l-.5-2a8.4 8.4 0 0 1-1.5-.9l-2 .6-1.8-3.1L6 11.2A7.4 7.4 0 0 1 5.9 10c0-.4 0-.8.1-1.2L4.5 7.4l1.8-3.1 2 .6A8.4 8.4 0 0 1 9.8 4l.5-2h3.6ZM12 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
+        </button>
+      </div>
     </header>
 
     <main class="workspace">
       <section id="viewport" class="viewport">
         <div id="emptyState" class="empty-state">
-          <div class="empty-icon">◇</div>
-          <h1>Drop a 3D model here</h1>
-          <p>GLB, GLTF, FBX, OBJ, STL, PLY, DAE, 3MF, 3DS, USDZ and VRML</p>
-          <p class="muted">Select related texture / MTL / BIN files together when needed.</p>
-          <button id="emptyOpenButton" class="primary">Choose files</button>
+          <div class="empty-card">
+            <div class="empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 48 48"><path d="m24 5 16 9.2v19.6L24 43 8 33.8V14.2L24 5Zm0 4.6-12 6.9v14.9l12 6.9 12-6.9V16.5L24 9.6Zm0 4.8 7.8 4.5v9L24 32.4l-7.8-4.5v-9l7.8-4.5Z"/></svg>
+            </div>
+            <h1>Open a 3D model</h1>
+            <p>Drop a model anywhere in the viewport, or choose files from your computer.</p>
+            <div class="format-list">GLB · GLTF · FBX · OBJ · STL · PLY · DAE · 3MF · 3DS · USDZ · VRML</div>
+            <button id="emptyOpenButton" class="primary empty-open-button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h6l1.7 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-10a2 2 0 0 1 2-2Zm0 2v10h16v-8h-9.2L9.1 7.5H4Z"/></svg>
+              Choose files
+            </button>
+            <p class="muted">Include related texture, MTL or BIN files when the model needs them.</p>
+          </div>
         </div>
-        <div id="dropOverlay" class="drop-overlay">Drop files to open</div>
-        <div id="viewportBadge" class="viewport-badge">Ready</div>
+        <div id="dropOverlay" class="drop-overlay">
+          <div class="drop-overlay-card">
+            <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M23 33V17.8l-5.6 5.6-2.8-2.8L25 10.2l10.4 10.4-2.8 2.8-5.6-5.6V33h-4ZM9 38h30v4H9v-4Z"/></svg>
+            <strong>Drop files to open</strong>
+          </div>
+        </div>
+        <div id="viewportBadge" class="viewport-badge"><span class="badge-dot"></span><span>Ready</span></div>
       </section>
 
       <aside class="sidebar">
-        <section class="panel model-panel">
-          <div class="panel-title">Model</div>
-          <div id="modelName" class="model-name">No model loaded</div>
-          <div class="stats-grid">
-            <span>Meshes</span><strong id="meshCount">—</strong>
-            <span>Vertices</span><strong id="vertexCount">—</strong>
-            <span>Triangles</span><strong id="triangleCount">—</strong>
-            <span>Animations</span><strong id="animationCount">—</strong>
-          </div>
-        </section>
+        <div class="sidebar-scroll">
+          <section class="panel model-panel">
+            <div class="panel-title"><span>Model</span><span class="panel-accent"></span></div>
+            <div id="modelName" class="model-name">No model loaded</div>
+            <div class="stats-grid">
+              <div class="stat"><span>Meshes</span><strong id="meshCount">—</strong></div>
+              <div class="stat"><span>Vertices</span><strong id="vertexCount">—</strong></div>
+              <div class="stat"><span>Triangles</span><strong id="triangleCount">—</strong></div>
+              <div class="stat"><span>Animations</span><strong id="animationCount">—</strong></div>
+            </div>
+          </section>
 
-        <section id="animationPanel" class="panel" hidden>
-          <div class="panel-title">Animation</div>
-          <select id="animationSelect"></select>
-          <div class="row gap">
-            <button id="playPauseButton">Pause</button>
-            <button id="restartAnimationButton">Restart</button>
-          </div>
-        </section>
+          <section id="animationPanel" class="panel" hidden>
+            <div class="panel-title"><span>Animation</span><span class="panel-accent"></span></div>
+            <select id="animationSelect"></select>
+            <div class="row gap">
+              <button id="playPauseButton">Pause</button>
+              <button id="restartAnimationButton">Restart</button>
+            </div>
+          </section>
 
-        <section class="panel tree-panel">
-          <div class="panel-title row">
-            <span>Scene objects</span>
-            <button id="clearIsolationButton" class="ghost small" hidden>Show all</button>
-          </div>
-          <input id="treeSearch" class="search" placeholder="Filter objects…" />
-          <div id="objectTree" class="object-tree">
-            <div class="tree-empty">Open a model to inspect its objects.</div>
-          </div>
-        </section>
+          <section class="panel tree-panel">
+            <div class="panel-title row">
+              <span>Scene objects</span>
+              <button id="clearIsolationButton" class="ghost small" hidden>Show all</button>
+            </div>
+            <div class="search-wrap">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 4a6.5 6.5 0 1 1-4.1 11.55L2.97 19l-1.42-1.42 3.44-3.44A6.5 6.5 0 0 1 10.5 4Zm0 2a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"/></svg>
+              <input id="treeSearch" class="search" placeholder="Filter objects…" />
+            </div>
+            <div id="objectTree" class="object-tree">
+              <div class="tree-empty">Open a model to inspect its objects.</div>
+            </div>
+          </section>
 
-        <section class="panel help-panel">
-          <div class="panel-title">Controls</div>
-          <div class="help-row"><span>Rotate</span><kbd>Left drag</kbd></div>
-          <div class="help-row"><span>Pan</span><kbd>Right drag</kbd></div>
-          <div class="help-row"><span>Zoom</span><kbd>Wheel</kbd></div>
-          <div class="help-row"><span>Focus object</span><kbd>Click name</kbd></div>
-        </section>
+          <section class="panel help-panel">
+            <div class="panel-title"><span>Navigation</span><span class="panel-accent"></span></div>
+            <div class="help-row"><span>Rotate</span><kbd>Left drag</kbd></div>
+            <div class="help-row"><span>Pan</span><kbd>Right drag</kbd></div>
+            <div class="help-row"><span>Zoom</span><kbd>Wheel</kbd></div>
+            <div class="help-row"><span>Focus object</span><kbd>Click name</kbd></div>
+          </section>
+        </div>
       </aside>
     </main>
 
     <footer class="statusbar">
-      <span id="statusText">Ready</span>
+      <span class="status-label"><span class="status-dot"></span><span id="statusText">Ready</span></span>
       <span class="spacer"></span>
-      <span id="formatText">No file</span>
+      <span id="formatText" class="format-status">No file</span>
     </footer>
   </div>
 
