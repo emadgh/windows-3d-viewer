@@ -1,23 +1,20 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)]
+  [string]$Executable,
+
+  [Parameter(Mandatory = $true, Position = 1)]
   [string]$ModelPath
 )
 
 $ErrorActionPreference = 'Stop'
 
-$packageRoot = Split-Path -Parent $PSScriptRoot
-if (Test-Path (Join-Path $PSScriptRoot 'bin/windows-3d-viewer.exe')) {
-  # When this script is copied to the package root, PSScriptRoot already is the package root.
-  $packageRoot = $PSScriptRoot
-}
-
-$exe = Join-Path $packageRoot 'bin/windows-3d-viewer.exe'
 $stageRoot = Join-Path $env:LOCALAPPDATA 'Windows3DViewer\launch-cache'
 $launchManifest = Join-Path $stageRoot 'launch.json'
 
-if (-not (Test-Path -LiteralPath $exe)) { throw "Viewer executable not found: $exe" }
+if (-not (Test-Path -LiteralPath $Executable)) { throw "Viewer executable not found: $Executable" }
 if (-not (Test-Path -LiteralPath $ModelPath)) { throw "Model file not found: $ModelPath" }
 
+$exe = (Get-Item -LiteralPath $Executable).FullName
 $model = Get-Item -LiteralPath $ModelPath
 $sourceRoot = $model.Directory.FullName.TrimEnd('\', '/')
 
