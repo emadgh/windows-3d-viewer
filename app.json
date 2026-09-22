@@ -12,23 +12,23 @@
     "commands": [
       {
         "name": "app.registerFileAssociations",
-        "origins": ["zero://app", "http://127.0.0.1:5173"]
+        "origins": ["zero://app", "zero://inline", "http://127.0.0.1:5173"]
       },
       {
         "name": "app.openDefaultApps",
-        "origins": ["zero://app", "http://127.0.0.1:5173"]
+        "origins": ["zero://app", "zero://inline", "http://127.0.0.1:5173"]
       },
       {
         "name": "app.getLaunchManifest",
-        "origins": ["zero://app", "http://127.0.0.1:5173"]
+        "origins": ["zero://app", "zero://inline", "http://127.0.0.1:5173"]
       },
       {
         "name": "app.readLaunchFileChunk",
-        "origins": ["zero://app", "http://127.0.0.1:5173"]
+        "origins": ["zero://app", "zero://inline", "http://127.0.0.1:5173"]
       },
       {
         "name": "app.consumeLaunchRequest",
-        "origins": ["zero://app", "http://127.0.0.1:5173"]
+        "origins": ["zero://app", "zero://inline", "http://127.0.0.1:5173"]
       }
     ]
   },
