@@ -2,7 +2,7 @@ name: Windows Build
 
 on:
   push:
-    branches: [main, rust-runtime-rewrite]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
