@@ -306,7 +306,6 @@ fn register_file_associations() -> Result<(), String> {
     let exe = env::current_exe().map_err(|error| format!("Could not resolve executable path: {error}"))?;
     let exe_text = exe.to_string_lossy();
     let open_command = format!("\"{exe_text}\" \"%1\"");
-    let icon_value = format!("\"{exe_text}\",0");
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let capability_relative = r"Software\EmadGH\Windows3DViewer\Capabilities";
@@ -358,12 +357,9 @@ fn register_file_associations() -> Result<(), String> {
             .set_value("", &description)
             .map_err(|error| error.to_string())?;
 
-        let (icon_key, _) = prog_key
-            .create_subkey("DefaultIcon")
-            .map_err(|error| error.to_string())?;
-        icon_key
-            .set_value("", &icon_value)
-            .map_err(|error| error.to_string())?;
+        // Do not assign the application icon to associated model files. Removing any
+        // legacy DefaultIcon value lets Windows Shell use its normal/default file icon.
+        let _ = prog_key.delete_subkey_all("DefaultIcon");
 
         let (command_key, _) = prog_key
             .create_subkey(r"shell\open\command")
