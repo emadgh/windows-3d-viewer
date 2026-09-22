@@ -25,7 +25,7 @@ try {
   rustup target add $target | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "Could not install Rust target $target." }
 
-  cargo build --release --locked --target $target
+  cargo build --release --target $target
   if ($LASTEXITCODE -ne 0) { throw 'Rust release build failed.' }
 
   $builtExe = Join-Path $repo "target/$target/release/windows-3d-viewer.exe"
