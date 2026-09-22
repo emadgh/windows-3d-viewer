@@ -12,12 +12,10 @@ if (Test-Path (Join-Path $PSScriptRoot 'bin/windows-3d-viewer.exe')) {
 }
 
 $exe = Join-Path $packageRoot 'bin/windows-3d-viewer.exe'
-$frontendRoot = Join-Path $packageRoot 'resources/frontend/dist'
-$stageRoot = Join-Path $frontendRoot '__open__'
+$stageRoot = Join-Path $env:LOCALAPPDATA 'Windows3DViewer\launch-cache'
 $launchManifest = Join-Path $stageRoot 'launch.json'
 
 if (-not (Test-Path -LiteralPath $exe)) { throw "Viewer executable not found: $exe" }
-if (-not (Test-Path -LiteralPath $frontendRoot)) { throw "Viewer frontend not found: $frontendRoot" }
 if (-not (Test-Path -LiteralPath $ModelPath)) { throw "Model file not found: $ModelPath" }
 
 $model = Get-Item -LiteralPath $ModelPath
@@ -62,6 +60,8 @@ $manifest = [ordered]@{
   files = @($manifestFiles)
   createdUtc = [DateTime]::UtcNow.ToString('o')
 }
-$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $launchManifest -Encoding UTF8 -NoNewline
+$json = $manifest | ConvertTo-Json -Depth 4
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText($launchManifest, $json, $utf8NoBom)
 
 Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)
