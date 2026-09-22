@@ -67,6 +67,56 @@ jobs:
           Stop-Process -Id $process.Id -Force
           Write-Host 'Startup smoke test passed: application stayed running.'
 
+      - name: Smoke test Explorer model launch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Resolve-Path 'dist/windows-3d-viewer-windows-x64.zip'
+          $smoke = Join-Path $env:RUNNER_TEMP 'windows-3d-viewer-association-smoke'
+          if (Test-Path $smoke) { Remove-Item $smoke -Recurse -Force }
+          Expand-Archive -Path $zip -DestinationPath $smoke -Force
+          $packageRoot = Get-ChildItem $smoke -Directory | Where-Object { $_.Name -eq 'windows-3d-viewer-windows' } | Select-Object -First 1
+          if (-not $packageRoot) { throw 'Packaged application root not found.' }
+
+          $sampleDir = Join-Path $env:RUNNER_TEMP 'windows-3d-viewer-sample'
+          New-Item -ItemType Directory -Path $sampleDir -Force | Out-Null
+          $sample = Join-Path $sampleDir 'association-smoke.stl'
+          @'
+          solid association_smoke
+            facet normal 0 0 1
+              outer loop
+                vertex 0 0 0
+                vertex 1 0 0
+                vertex 0 1 0
+              endloop
+            endfacet
+          endsolid association_smoke
+          '@ | Set-Content -LiteralPath $sample -Encoding ascii
+
+          $launcher = Join-Path $packageRoot.FullName 'open-model.ps1'
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $launcher $sample
+          Start-Sleep -Seconds 10
+
+          $process = Get-Process -Name 'windows-3d-viewer' -ErrorAction SilentlyContinue | Sort-Object StartTime -Descending | Select-Object -First 1
+          if (-not $process) {
+            throw 'Explorer-launch smoke test did not leave the viewer process running.'
+          }
+
+          $stageRoot = Join-Path $packageRoot.FullName 'resources/frontend/dist/__open__'
+          $manifest = Join-Path $stageRoot 'launch.json'
+          $stagedModel = Join-Path $stageRoot 'association-smoke.stl'
+          if (-not (Test-Path $stagedModel)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw 'Association launcher did not stage the model.'
+          }
+          if (Test-Path $manifest) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw 'Launch request was not consumed by the WebView/native bridge.'
+          }
+
+          Stop-Process -Id $process.Id -Force
+          Write-Host 'Explorer association smoke test passed: staged STL was handed to the running viewer.'
+
       - name: List artifacts
         shell: pwsh
         run: Get-ChildItem -Recurse dist | Format-Table FullName, Length
