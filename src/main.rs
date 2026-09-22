@@ -246,7 +246,7 @@ fn asset_response(path: &str) -> Response<Cow<'static, [u8]>> {
         None => Response::builder()
             .status(404)
             .header(CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Cow::Borrowed(b"Not Found"))
+            .body(Cow::Owned(b"Not Found".to_vec()))
             .expect("valid not-found response"),
     }
 }
