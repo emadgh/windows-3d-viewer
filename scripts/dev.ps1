@@ -1,26 +1,23 @@
 $ErrorActionPreference = 'Stop'
 
 $repo = Resolve-Path (Join-Path $PSScriptRoot '..')
-$workspaceRoot = Join-Path $repo '.native-workspace'
-$workspace = Join-Path $workspaceRoot 'windows-3d-viewer'
 
-if (-not (Get-Command native -ErrorAction SilentlyContinue)) {
-  throw 'Native SDK CLI is not installed. Run: npm install -g @native-sdk/cli@0.9.4'
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+  throw 'Rust/Cargo is not installed.'
+}
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+  throw 'Node.js/npm is not installed.'
 }
 
-if (Test-Path $workspace) { Remove-Item $workspace -Recurse -Force }
-New-Item -ItemType Directory -Path $workspaceRoot -Force | Out-Null
-
-native init $workspace --frontend vite
-Copy-Item (Join-Path $repo 'app.json') (Join-Path $workspace 'app.json') -Force
-Remove-Item (Join-Path $workspace 'frontend') -Recurse -Force
-Copy-Item (Join-Path $repo 'frontend') (Join-Path $workspace 'frontend') -Recurse -Force
-
-Push-Location $workspace
+Push-Location $repo
 try {
   npm install --prefix frontend
-  native validate app.json
-  native dev
+  if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed.' }
+
+  npm run build --prefix frontend
+  if ($LASTEXITCODE -ne 0) { throw 'Frontend Vite build failed.' }
+
+  cargo run
 }
 finally {
   Pop-Location
