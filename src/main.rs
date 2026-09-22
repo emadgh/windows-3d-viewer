@@ -7,7 +7,6 @@ use std::{
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -61,8 +60,7 @@ const SUPPORTED_EXTENSIONS: &[(&str, &str)] = &[
 ];
 
 const SIDECAR_EXTENSIONS: &[&str] = &[
-    "bin", "mtl", "png", "jpg", "jpeg", "webp", "bmp", "tga", "dds", "ktx2", "gif",
-    "hdr", "exr",
+    "bin", "mtl", "png", "jpg", "jpeg", "webp", "bmp", "tga", "dds", "ktx2", "gif", "hdr", "exr",
 ];
 
 const BRIDGE_INIT_SCRIPT: &str = r#"
@@ -165,15 +163,14 @@ fn is_supported_model(path: &Path) -> bool {
 }
 
 fn build_launch_state() -> Option<LaunchState> {
-    let argument = env::args_os().skip(1).find(|arg| {
-        let text = arg.to_string_lossy();
-        !text.starts_with('-')
-    })?;
-
-    let requested = PathBuf::from(argument);
-    if !requested.is_file() || !is_supported_model(&requested) {
-        return None;
-    }
+    // Explorer passes the selected file as a normal quoted argument. Look for
+    // the first existing supported model instead of assuming it is the first
+    // non-option argument; this also tolerates future launch flags and avoids
+    // silently ignoring a valid path when an unrelated argument is present.
+    let requested = env::args_os()
+        .skip(1)
+        .map(PathBuf::from)
+        .find(|path| path.is_file() && is_supported_model(path))?;
 
     let primary_absolute = fs::canonicalize(&requested).ok()?;
     let source_root = primary_absolute.parent()?.to_path_buf();
@@ -184,7 +181,11 @@ fn build_launch_state() -> Option<LaunchState> {
         absolute: primary_absolute.clone(),
     }];
 
-    for entry in WalkDir::new(&source_root).follow_links(false).into_iter().filter_map(Result::ok) {
+    for entry in WalkDir::new(&source_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -236,7 +237,11 @@ fn mime_for(path: &str) -> String {
 
 fn asset_response(path: &str) -> Response<Cow<'static, [u8]>> {
     let requested = path.trim_start_matches('/');
-    let key = if requested.is_empty() { "index.html" } else { requested };
+    let key = if requested.is_empty() {
+        "index.html"
+    } else {
+        requested
+    };
 
     let asset = FrontendAssets::get(key).or_else(|| {
         if Path::new(key).extension().is_none() {
@@ -277,11 +282,18 @@ fn read_launch_file_chunk(state: &LaunchState, payload: &Value) -> Result<Value,
         .map_err(|error| format!("Could not open {}: {error}", launch_file.absolute.display()))?;
     let length = file
         .metadata()
-        .map_err(|error| format!("Could not inspect {}: {error}", launch_file.absolute.display()))?
+        .map_err(|error| {
+            format!(
+                "Could not inspect {}: {error}",
+                launch_file.absolute.display()
+            )
+        })?
         .len();
 
     if offset > length {
-        return Err(format!("Invalid launch file offset {offset} for {relative}."));
+        return Err(format!(
+            "Invalid launch file offset {offset} for {relative}."
+        ));
     }
 
     file.seek(SeekFrom::Start(offset))
@@ -303,7 +315,10 @@ fn read_launch_file_chunk(state: &LaunchState, payload: &Value) -> Result<Value,
 
 #[cfg(windows)]
 fn register_file_associations() -> Result<(), String> {
-    let exe = env::current_exe().map_err(|error| format!("Could not resolve executable path: {error}"))?;
+    use std::ptr;
+
+    let exe = env::current_exe()
+        .map_err(|error| format!("Could not resolve executable path: {error}"))?;
     let exe_text = exe.to_string_lossy();
     let open_command = format!("\"{exe_text}\" \"%1\"");
 
@@ -318,6 +333,10 @@ fn register_file_associations() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     capabilities
         .set_value("ApplicationDescription", &"Fast local 3D model viewer")
+        .map_err(|error| error.to_string())?;
+    let application_icon = format!("{exe_text},0");
+    capabilities
+        .set_value("ApplicationIcon", &application_icon)
         .map_err(|error| error.to_string())?;
     let (file_associations, _) = capabilities
         .create_subkey("FileAssociations")
@@ -337,6 +356,12 @@ fn register_file_associations() -> Result<(), String> {
     application
         .set_value("FriendlyAppName", &APP_NAME)
         .map_err(|error| error.to_string())?;
+    let (application_icon_key, _) = application
+        .create_subkey("DefaultIcon")
+        .map_err(|error| error.to_string())?;
+    application_icon_key
+        .set_value("", &application_icon)
+        .map_err(|error| error.to_string())?;
     let (application_command, _) = application
         .create_subkey(r"shell\open\command")
         .map_err(|error| error.to_string())?;
@@ -351,7 +376,9 @@ fn register_file_associations() -> Result<(), String> {
         let token = extension.trim_start_matches('.');
         let prog_id = format!("Windows3DViewer.{token}");
         let prog_path = format!(r"Software\Classes\{prog_id}");
-        let (prog_key, _) = hkcu.create_subkey(&prog_path).map_err(|error| error.to_string())?;
+        let (prog_key, _) = hkcu
+            .create_subkey(&prog_path)
+            .map_err(|error| error.to_string())?;
         let description = format!("Windows 3D Viewer {label} File");
         prog_key
             .set_value("", &description)
@@ -384,6 +411,12 @@ fn register_file_associations() -> Result<(), String> {
             .map_err(|error| error.to_string())?;
     }
 
+    // Explorer caches association and icon changes. Refresh it immediately so
+    // Open With and the Default Apps page see the registration from this run.
+    unsafe {
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, ptr::null(), ptr::null());
+    }
+
     Ok(())
 }
 
@@ -392,17 +425,65 @@ fn register_file_associations() -> Result<(), String> {
     Err("File associations are supported only on Windows.".to_string())
 }
 
+#[cfg(windows)]
 fn open_default_apps() -> Result<(), String> {
-    let registered_uri = "ms-settings:defaultapps?registeredAppUser=Windows%203D%20Viewer";
-    if Command::new("explorer.exe").arg(registered_uri).spawn().is_ok() {
-        return Ok(());
+    use std::{ffi::OsStr, iter::once, os::windows::ffi::OsStrExt, ptr};
+
+    fn wide(value: &str) -> Vec<u16> {
+        OsStr::new(value).encode_wide().chain(once(0)).collect()
     }
 
-    Command::new("explorer.exe")
-        .arg("ms-settings:defaultapps")
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Could not open Windows Default Apps: {error}"))
+    let operation = wide("open");
+    let uri = wide("ms-settings:defaultapps?registeredAppUser=Windows%203D%20Viewer");
+    let result = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            operation.as_ptr(),
+            uri.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+
+    if result as usize > 32 {
+        Ok(())
+    } else {
+        Err(format!(
+            "Could not open Windows Default Apps (ShellExecuteW returned {result})."
+        ))
+    }
+}
+
+#[cfg(not(windows))]
+fn open_default_apps() -> Result<(), String> {
+    Err("Windows Default Apps are available only on Windows.".to_string())
+}
+
+#[cfg(windows)]
+const SHCNE_ASSOCCHANGED: u32 = 0x0800_0000;
+#[cfg(windows)]
+const SHCNF_IDLIST: u32 = 0x0000;
+#[cfg(windows)]
+const SW_SHOWNORMAL: i32 = 1;
+
+#[cfg(windows)]
+#[link(name = "shell32")]
+unsafe extern "system" {
+    fn SHChangeNotify(
+        event_id: u32,
+        flags: u32,
+        item1: *const std::ffi::c_void,
+        item2: *const std::ffi::c_void,
+    );
+    fn ShellExecuteW(
+        hwnd: *mut std::ffi::c_void,
+        operation: *const u16,
+        file: *const u16,
+        parameters: *const u16,
+        directory: *const u16,
+        show_command: i32,
+    ) -> isize;
 }
 
 #[cfg(windows)]
@@ -450,7 +531,11 @@ fn update_status_json(updater: &AppUpdater) -> Value {
             "latestVersion": info.version,
             "releaseUrl": info.release_url,
         }),
-        UpdateStatus::Downloading { info, downloaded, total } => json!({
+        UpdateStatus::Downloading {
+            info,
+            downloaded,
+            total,
+        } => json!({
             "state": "downloading",
             "currentVersion": APP_VERSION,
             "latestVersion": info.version,
@@ -538,9 +623,10 @@ fn dispatch_bridge(
             open_default_apps()?;
             Ok(json!({ "opened": true }))
         }
-        "app.getUpdateStatus" | "app.checkForUpdates" | "app.downloadUpdate" | "app.applyUpdate" => {
-            dispatch_updater_command(updater, request.command.as_str())
-        }
+        "app.getUpdateStatus"
+        | "app.checkForUpdates"
+        | "app.downloadUpdate"
+        | "app.applyUpdate" => dispatch_updater_command(updater, request.command.as_str()),
         "app.getLaunchManifest" => Ok(launch_state
             .as_ref()
             .map(LaunchState::manifest)

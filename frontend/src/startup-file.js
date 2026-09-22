@@ -128,6 +128,12 @@ async function openNativeLaunchFile() {
   }
 }
 
-window.addEventListener('load', () => {
+function scheduleNativeLaunchFile() {
   setTimeout(openNativeLaunchFile, 0);
-}, { once: true });
+}
+
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', scheduleNativeLaunchFile, { once: true });
+} else {
+  scheduleNativeLaunchFile();
+}

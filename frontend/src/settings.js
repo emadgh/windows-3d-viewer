@@ -1,5 +1,4 @@
 import './settings.css';
-import './startup-file.js';
 
 const settingsButton = document.querySelector('#settingsButton');
 const modal = document.querySelector('#settingsModal');
@@ -242,8 +241,7 @@ setDefaultButton.addEventListener('click', async () => {
 
   try {
     await invokeNative('app.registerFileAssociations');
-    setAssociationStatus('Registered. Confirm Windows 3D Viewer for the formats you want on the Default Apps page.');
-    await invokeNative('app.openDefaultApps');
+    setAssociationStatus('Supported formats registered. Use “Open Default Apps” only if Windows needs a final confirmation.');
   } catch (error) {
     console.error(error);
     setAssociationStatus(error?.message || 'Could not register file associations.', true);
