@@ -10,11 +10,16 @@ if (-not (Get-Command native -ErrorAction SilentlyContinue)) {
 }
 
 if (Test-Path $workspace) { Remove-Item $workspace -Recurse -Force }
+if (Test-Path $outputDir) { Remove-Item $outputDir -Recurse -Force }
 New-Item -ItemType Directory -Path $workspaceRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 
+# Let Native SDK generate the version-matched build graph, then replace the
+# authored surfaces with this repository's production manifest/frontend/core.
 native init $workspace --frontend vite
+Copy-Item (Join-Path $repo 'app.zon') (Join-Path $workspace 'app.zon') -Force
 Copy-Item (Join-Path $repo 'app.json') (Join-Path $workspace 'app.json') -Force
+Copy-Item (Join-Path $repo 'native/main.zig') (Join-Path $workspace 'src/main.zig') -Force
 Remove-Item (Join-Path $workspace 'frontend') -Recurse -Force
 Copy-Item (Join-Path $repo 'frontend') (Join-Path $workspace 'frontend') -Recurse -Force
 
@@ -22,23 +27,28 @@ Push-Location $workspace
 try {
   npm install --prefix frontend
   npm run build --prefix frontend
-  native validate app.json
+
+  # native build validates app.zon as part of the generated build graph.
   native build
   native package --target windows --assets frontend/dist
 
-  $exe = Join-Path $workspace 'zig-out/bin/windows-3d-viewer.exe'
-  if (Test-Path $exe) {
-    Copy-Item $exe (Join-Path $outputDir 'windows-3d-viewer.exe') -Force
+  $packageRoot = Join-Path $workspace 'zig-out/package/windows-3d-viewer-windows'
+  if (-not (Test-Path $packageRoot)) {
+    throw "Expected packaged application was not created: $packageRoot"
   }
 
-  $packageDir = Join-Path $workspace 'zig-out/package'
+  $packageExe = Join-Path $packageRoot 'bin/windows-3d-viewer.exe'
+  $webViewLoader = Join-Path $packageRoot 'bin/WebView2Loader.dll'
+  $frontendIndex = Join-Path $packageRoot 'resources/frontend/dist/index.html'
+  foreach ($required in @($packageExe, $webViewLoader, $frontendIndex)) {
+    if (-not (Test-Path $required)) { throw "Required packaged file is missing: $required" }
+  }
+
   $zip = Join-Path $outputDir 'windows-3d-viewer-windows-x64.zip'
-  if (Test-Path $zip) { Remove-Item $zip -Force }
-  if (Test-Path $packageDir) {
-    Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zip -Force
-  }
+  Compress-Archive -Path $packageRoot -DestinationPath $zip -Force
 
-  Write-Host "Build artifacts: $outputDir"
+  Write-Host "Portable Windows package: $zip"
+  Write-Host 'Important: keep bin/, resources/, and the executable together. Do not copy the EXE out of the package.'
 }
 finally {
   Pop-Location
