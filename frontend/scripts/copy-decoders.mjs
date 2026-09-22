@@ -4,14 +4,26 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const frontendRoot = resolve(here, '..');
-const source = resolve(frontendRoot, 'node_modules/three/examples/jsm/libs/draco/gltf');
-const destination = resolve(frontendRoot, 'public/draco/gltf');
 
-if (!existsSync(source)) {
-  throw new Error(`Three.js Draco decoder directory was not found: ${source}`);
+const copies = [
+  {
+    label: 'Draco',
+    source: resolve(frontendRoot, 'node_modules/three/examples/jsm/libs/draco/gltf'),
+    destination: resolve(frontendRoot, 'public/draco/gltf'),
+  },
+  {
+    label: 'Basis/KTX2',
+    source: resolve(frontendRoot, 'node_modules/three/examples/jsm/libs/basis'),
+    destination: resolve(frontendRoot, 'public/basis'),
+  },
+];
+
+for (const entry of copies) {
+  if (!existsSync(entry.source)) {
+    throw new Error(`${entry.label} decoder directory was not found: ${entry.source}`);
+  }
+  rmSync(entry.destination, { recursive: true, force: true });
+  mkdirSync(entry.destination, { recursive: true });
+  cpSync(entry.source, entry.destination, { recursive: true });
+  console.log(`Copied ${entry.label} decoder assets to ${entry.destination}`);
 }
-
-rmSync(destination, { recursive: true, force: true });
-mkdirSync(destination, { recursive: true });
-cpSync(source, destination, { recursive: true });
-console.log(`Copied Draco decoders to ${destination}`);
