@@ -40,6 +40,16 @@ finally {
 Copy-Item (Join-Path $repo 'app.zon') (Join-Path $workspace 'app.zon') -Force
 Copy-Item (Join-Path $repo 'app.json') (Join-Path $workspace 'app.json') -Force
 Copy-Item (Join-Path $repo 'native/main.zig') (Join-Path $workspace 'src/main.zig') -Force
+
+# Native SDK 0.9.4 targets Zig 0.16, where the recursive directory helper is
+# createDirPath. Keep the checked-in source readable while normalizing the
+# generated workspace to the exact toolchain API used by CI and local builds.
+$workspaceMain = Join-Path $workspace 'src/main.zig'
+$mainSource = [System.IO.File]::ReadAllText($workspaceMain)
+$mainSource = $mainSource.Replace('.makePath(', '.createDirPath(')
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($workspaceMain, $mainSource, $utf8NoBom)
+
 Remove-Item (Join-Path $workspace 'frontend') -Recurse -Force
 Copy-Item (Join-Path $repo 'frontend') (Join-Path $workspace 'frontend') -Recurse -Force
 
@@ -73,7 +83,6 @@ try {
   }
   $lines.Add('};')
 
-  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
   [System.IO.File]::WriteAllText($generatedAssets, ($lines -join "`n") + "`n", $utf8NoBom)
 
   native build
