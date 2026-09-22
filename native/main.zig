@@ -6,6 +6,7 @@ pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
 const bridge_origins = [_][]const u8{
     "zero://app",
+    "zero://inline",
     "http://127.0.0.1:5173",
 };
 
