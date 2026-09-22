@@ -35,7 +35,7 @@ const APP_EXE_NAME: &str = "windows-3d-viewer.exe";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const UPDATE_REPOSITORY: &str = "emadgh/windows-3d-viewer";
 const UPDATE_CHECKSUM_ASSET: &str = "windows-3d-viewer.exe.sha256";
-const FILE_CHUNK_BYTES: usize = 6000;
+const FILE_CHUNK_BYTES: usize = 256 * 1024;
 
 #[cfg(windows)]
 type AppUpdater = UpdateManager;
@@ -106,6 +106,7 @@ struct FrontendAssets;
 enum UserEvent {
     Bridge(String),
     OpenFile(PathBuf),
+    LaunchReady(Option<LaunchState>),
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,6 +121,7 @@ struct BridgeRequest {
 struct LaunchFile {
     relative: String,
     absolute: PathBuf,
+    size: u64,
 }
 
 #[derive(Debug)]
@@ -133,6 +135,7 @@ impl LaunchState {
         json!({
             "primary": self.primary,
             "files": self.files.iter().map(|file| file.relative.clone()).collect::<Vec<_>>(),
+            "totalBytes": self.files.iter().map(|file| file.size).sum::<u64>(),
             "createdUtc": Value::Null,
         })
     }
@@ -163,6 +166,124 @@ fn is_supported_model(path: &Path) -> bool {
         .any(|(candidate, _)| candidate.trim_start_matches('.') == extension)
 }
 
+fn collect_gltf_uris(value: &Value, uris: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(Value::String(uri)) = object.get("uri") {
+                uris.push(uri.clone());
+            }
+            for value in object.values() {
+                collect_gltf_uris(value, uris);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_gltf_uris(value, uris);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn decode_uri_path(uri: &str) -> Option<String> {
+    let uri = uri.split(['?', '#']).next()?;
+    let bytes = uri.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let high = *bytes.get(index + 1)?;
+            let low = *bytes.get(index + 2)?;
+            let high = (high as char).to_digit(16)? as u8;
+            let low = (low as char).to_digit(16)? as u8;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+
+    String::from_utf8(decoded).ok()
+}
+
+fn gltf_document_json(model_path: &Path) -> Option<Vec<u8>> {
+    const GLB_JSON_CHUNK: u32 = 0x4e4f534a;
+    const MAX_JSON_BYTES: usize = 64 * 1024 * 1024;
+
+    if extension_lower(model_path).as_deref() == Some("gltf") {
+        let json = fs::read(model_path).ok()?;
+        return (json.len() <= MAX_JSON_BYTES).then_some(json);
+    }
+
+    let mut file = File::open(model_path).ok()?;
+    let mut header = [0_u8; 12];
+    if file.read_exact(&mut header).is_err()
+        || &header[0..4] != b"glTF"
+        || u32::from_le_bytes(header[4..8].try_into().unwrap_or_default()) != 2
+    {
+        return None;
+    }
+
+    let mut chunk_header = [0_u8; 8];
+    if file.read_exact(&mut chunk_header).is_err()
+        || u32::from_le_bytes(chunk_header[4..8].try_into().unwrap_or_default()) != GLB_JSON_CHUNK
+    {
+        return None;
+    }
+
+    let json_length =
+        u32::from_le_bytes(chunk_header[0..4].try_into().unwrap_or_default()) as usize;
+    if json_length > MAX_JSON_BYTES {
+        return None;
+    }
+
+    let mut json_bytes = vec![0_u8; json_length];
+    file.read_exact(&mut json_bytes).ok()?;
+    Some(json_bytes)
+}
+
+fn gltf_external_files(model_path: &Path, source_root: &Path) -> Vec<PathBuf> {
+    let Some(json_bytes) = gltf_document_json(model_path) else {
+        return Vec::new();
+    };
+
+    let Ok(document) = serde_json::from_slice::<Value>(&json_bytes) else {
+        return Vec::new();
+    };
+    let mut uris = Vec::new();
+    collect_gltf_uris(&document, &mut uris);
+
+    let mut files = Vec::new();
+    for uri in uris {
+        if uri.starts_with("data:") || uri.contains("://") || uri.starts_with('/') {
+            continue;
+        }
+        let Some(decoded) = decode_uri_path(&uri) else {
+            continue;
+        };
+        if decoded.is_empty() {
+            continue;
+        }
+
+        let candidate = source_root.join(decoded);
+        let Ok(absolute) = fs::canonicalize(candidate) else {
+            continue;
+        };
+        if !absolute.starts_with(source_root)
+            || !absolute.is_file()
+            || absolute == model_path
+            || files.contains(&absolute)
+        {
+            continue;
+        }
+        files.push(absolute);
+    }
+
+    files
+}
+
 fn build_launch_state_for_path(requested: PathBuf) -> Option<LaunchState> {
     if !requested.is_file() || !is_supported_model(&requested) {
         return None;
@@ -171,39 +292,46 @@ fn build_launch_state_for_path(requested: PathBuf) -> Option<LaunchState> {
     let primary_absolute = fs::canonicalize(&requested).ok()?;
     let source_root = primary_absolute.parent()?.to_path_buf();
     let primary = primary_absolute.file_name()?.to_string_lossy().into_owned();
+    let primary_size = fs::metadata(&primary_absolute).ok()?.len();
 
     let mut files = vec![LaunchFile {
         relative: primary.clone(),
         absolute: primary_absolute.clone(),
+        size: primary_size,
     }];
 
-    for entry in WalkDir::new(&source_root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
+    let sidecar_paths = match extension_lower(&primary_absolute).as_deref() {
+        Some("glb" | "gltf") => gltf_external_files(&primary_absolute, &source_root),
+        Some("stl" | "ply" | "3mf" | "usdz") => Vec::new(),
+        _ => WalkDir::new(&source_root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .filter_map(|entry| {
+                let path = entry.into_path();
+                let extension = extension_lower(&path)?;
+                SIDECAR_EXTENSIONS
+                    .contains(&extension.as_str())
+                    .then_some(path)
+            })
+            .collect(),
+    };
 
-        let path = entry.path();
+    for path in sidecar_paths {
         if path == primary_absolute {
             continue;
         }
-
-        let Some(extension) = extension_lower(path) else {
-            continue;
-        };
-        if !SIDECAR_EXTENSIONS.contains(&extension.as_str()) {
-            continue;
-        }
-
         let Ok(relative_path) = path.strip_prefix(&source_root) else {
             continue;
         };
+        let size = fs::metadata(&path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
         files.push(LaunchFile {
             relative: path_to_web(relative_path),
-            absolute: path.to_path_buf(),
+            absolute: path,
+            size,
         });
     }
 
@@ -319,6 +447,7 @@ fn read_launch_file_chunk(state: &LaunchState, payload: &Value) -> Result<Value,
         "data": BASE64.encode(buffer),
         "nextOffset": next_offset,
         "eof": next_offset >= length,
+        "length": length,
     }))
 }
 
@@ -963,11 +1092,27 @@ fn run_app() -> Result<(), Box<dyn Error>> {
                 }
             }
             Event::UserEvent(UserEvent::OpenFile(path)) => {
-                if let Some(state) = build_launch_state_for_path(path) {
-                    launch_state = Some(state);
-                    let _ = webview.evaluate_script("window.__w3dvOpenNativeLaunchFile?.();");
-                }
+                let file_name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                let file_name =
+                    serde_json::to_string(&file_name).unwrap_or_else(|_| "\"model\"".to_string());
+                let _ = webview.evaluate_script(&format!(
+                    "window.__w3dvShowNativeOpenStatus?.({file_name});"
+                ));
+
+                let launch_proxy = proxy.clone();
+                std::thread::spawn(move || {
+                    let state = build_launch_state_for_path(path);
+                    let _ = launch_proxy.send_event(UserEvent::LaunchReady(state));
+                });
             }
+            Event::UserEvent(UserEvent::LaunchReady(Some(state))) => {
+                launch_state = Some(state);
+                let _ = webview.evaluate_script("window.__w3dvOpenNativeLaunchFile?.();");
+            }
+            Event::UserEvent(UserEvent::LaunchReady(None)) => {}
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..

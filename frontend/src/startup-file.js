@@ -40,7 +40,7 @@ function decodeBase64(value) {
   return bytes;
 }
 
-async function readNativeFile(relativePath) {
+async function readNativeFile(relativePath, onProgress) {
   const parts = [];
   let offset = 0;
   let iterations = 0;
@@ -53,6 +53,7 @@ async function readNativeFile(relativePath) {
 
     const bytes = decodeBase64(chunk?.data);
     if (bytes.length) parts.push(bytes);
+    if (bytes.length) onProgress?.(bytes.length);
 
     if (chunk?.eof) break;
     const nextOffset = Number(chunk?.nextOffset);
@@ -116,6 +117,10 @@ async function openNativeLaunchFileInternal() {
   if (!manifest?.primary || !Array.isArray(manifest.files) || !manifest.files.length) return;
 
   try {
+    const totalBytes = Number(manifest.totalBytes) || 0;
+    let bytesRead = 0;
+    setNativeOpenStatus(`Preparing ${manifest.primary}…`);
+
     const orderedPaths = [
       manifest.primary,
       ...manifest.files.filter((path) => path !== manifest.primary),
@@ -123,7 +128,13 @@ async function openNativeLaunchFileInternal() {
     const files = [];
 
     for (const relativePath of orderedPaths) {
-      files.push(await readNativeFile(relativePath));
+      files.push(await readNativeFile(relativePath, (count) => {
+        bytesRead += count;
+        if (totalBytes > 0) {
+          const percent = Math.min(100, Math.round((bytesRead / totalBytes) * 100));
+          setNativeOpenStatus(`Preparing ${manifest.primary}… ${percent}%`);
+        }
+      }));
     }
 
     if (typeof window.__w3dvLoadFiles !== 'function') {
@@ -138,6 +149,17 @@ async function openNativeLaunchFileInternal() {
     if (status) status.textContent = `Could not open associated file: ${error?.message || error}`;
   }
 }
+
+function setNativeOpenStatus(message) {
+  for (const selector of ['#statusText', '#viewportBadge']) {
+    const element = document.querySelector(selector);
+    if (element) element.textContent = message;
+  }
+}
+
+window.__w3dvShowNativeOpenStatus = (fileName) => {
+  setNativeOpenStatus(`Preparing ${fileName}…`);
+};
 
 window.__w3dvOpenNativeLaunchFile = openNativeLaunchFile;
 
