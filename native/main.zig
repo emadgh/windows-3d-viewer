@@ -1,8 +1,11 @@
 const std = @import("std");
 const runner = @import("runner");
 const native_sdk = @import("native_sdk");
+const embedded_assets = @import("embedded_assets.zig");
 
 pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
+
+extern "kernel32" fn SetDllDirectoryW(lpPathName: [*:0]const u16) callconv(.winapi) i32;
 
 const bridge_origins = [_][]const u8{
     "zero://app",
@@ -19,6 +22,7 @@ const bridge_policies = [_]native_sdk.BridgeCommandPolicy{
 };
 
 const launch_dir_name = "Windows3DViewer";
+const runtime_dir_name = "runtime";
 const launch_cache_name = "launch-cache";
 const launch_manifest_name = "launch.json";
 const max_manifest_bytes = 10 * 1024;
@@ -29,11 +33,9 @@ const register_associations_script =
     \\$parentPid = (Get-CimInstance Win32_Process -Filter ("ProcessId=" + $PID)).ParentProcessId
     \\$exe = (Get-Process -Id $parentPid -ErrorAction Stop).Path
     \\if ([string]::IsNullOrWhiteSpace($exe)) { throw 'Could not resolve application executable path.' }
-    \\$binDir = Split-Path -Parent $exe
-    \\$packageRoot = Split-Path -Parent $binDir
-    \\$launcher = Join-Path $packageRoot 'open-model.ps1'
+    \\$launcher = Join-Path $env:LOCALAPPDATA 'Windows3DViewer\\runtime\\open-model.ps1'
     \\if (-not (Test-Path -LiteralPath $launcher)) { throw ('File association launcher is missing: ' + $launcher) }
-    \\$launchCommand = ('powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" "%1"' -f $launcher)
+    \\$launchCommand = ('powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" "{1}" "%1"' -f $launcher, $exe)
     \\$appName = 'Windows 3D Viewer'
     \\$capRelative = 'Software\\EmadGH\\Windows3DViewer\\Capabilities'
     \\$capPath = 'HKCU:\\' + $capRelative
@@ -88,17 +90,81 @@ const ChunkRequest = struct {
     offset: u64 = 0,
 };
 
+const EmbeddedRuntime = struct {
+    root: []u8,
+    asset_root: []u8,
+};
+
+fn fileExists(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
+
+fn prepareEmbeddedRuntime(init: std.process.Init) !EmbeddedRuntime {
+    const local_app_data = init.environ_map.get("LOCALAPPDATA") orelse return error.LocalAppDataUnavailable;
+    const root = try std.fs.path.join(init.gpa, &.{ local_app_data, launch_dir_name, runtime_dir_name });
+    errdefer init.gpa.free(root);
+
+    try std.Io.Dir.cwd().makePath(init.io, root);
+
+    const marker_name = try std.fmt.allocPrint(init.gpa, ".payload-{s}.ready", .{embedded_assets.version});
+    defer init.gpa.free(marker_name);
+    const marker_path = try std.fs.path.join(init.gpa, &.{ root, marker_name });
+    defer init.gpa.free(marker_path);
+    const loader_path = try std.fs.path.join(init.gpa, &.{ root, "WebView2Loader.dll" });
+    defer init.gpa.free(loader_path);
+    const launcher_path = try std.fs.path.join(init.gpa, &.{ root, "open-model.ps1" });
+    defer init.gpa.free(launcher_path);
+    const index_path = try std.fs.path.join(init.gpa, &.{ root, "frontend", "dist", "index.html" });
+    defer init.gpa.free(index_path);
+
+    const ready = fileExists(init.io, marker_path) and
+        fileExists(init.io, loader_path) and
+        fileExists(init.io, launcher_path) and
+        fileExists(init.io, index_path);
+
+    if (!ready) {
+        for (embedded_assets.assets) |asset| {
+            const destination = try std.fs.path.join(init.gpa, &.{ root, asset.path });
+            defer init.gpa.free(destination);
+            if (std.fs.path.dirname(destination)) |parent| {
+                try std.Io.Dir.cwd().makePath(init.io, parent);
+            }
+            try std.Io.Dir.cwd().writeFile(init.io, .{
+                .sub_path = destination,
+                .data = asset.data,
+            });
+        }
+        try std.Io.Dir.cwd().writeFile(init.io, .{
+            .sub_path = marker_path,
+            .data = embedded_assets.version,
+        });
+    }
+
+    const root_w = try std.unicode.utf8ToUtf16LeAllocZ(init.gpa, root);
+    defer init.gpa.free(root_w);
+    if (SetDllDirectoryW(root_w.ptr) == 0) return error.SetDllDirectoryFailed;
+
+    const asset_root = try std.fs.path.join(init.gpa, &.{ root, "frontend", "dist" });
+    errdefer init.gpa.free(asset_root);
+    return .{ .root = root, .asset_root = asset_root };
+}
+
 const ViewerApp = struct {
     env_map: *std.process.Environ.Map,
     allocator: std.mem.Allocator,
     io: std.Io,
+    asset_root: []const u8,
     bridge_handlers: [5]native_sdk.BridgeHandler = undefined,
 
     fn app(self: *@This()) native_sdk.App {
         return .{
             .context = self,
             .name = "windows-3d-viewer",
-            .source = native_sdk.frontend.productionSource(.{ .dist = "frontend/dist" }),
+            .source = native_sdk.frontend.productionSource(.{
+                .dist = self.asset_root,
+                .entry = "index.html",
+            }),
             .source_fn = source,
         };
     }
@@ -106,7 +172,7 @@ const ViewerApp = struct {
     fn source(context: *anyopaque) anyerror!native_sdk.WebViewSource {
         const self: *@This() = @ptrCast(@alignCast(context));
         return native_sdk.frontend.sourceFromEnv(self.env_map, .{
-            .dist = "frontend/dist",
+            .dist = self.asset_root,
             .entry = "index.html",
         });
     }
@@ -239,10 +305,15 @@ const ViewerApp = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
+    const runtime = try prepareEmbeddedRuntime(init);
+    defer init.gpa.free(runtime.asset_root);
+    defer init.gpa.free(runtime.root);
+
     var app = ViewerApp{
         .env_map = init.environ_map,
         .allocator = init.gpa,
         .io = init.io,
+        .asset_root = runtime.asset_root,
     };
 
     try runner.runWithOptions(app.app(), .{
