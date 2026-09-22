@@ -1,6 +1,6 @@
 [package]
 name = "windows-3d-viewer"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.85"
 description = "Single-file Windows 3D model viewer with an embedded Vite frontend"
@@ -19,6 +19,9 @@ wry = "0.57.0"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56.0"
 update-via-github = { git = "https://github.com/emadgh/update-via-github.git", rev = "ec648957782ab800e14ddc6e0a15c694a46f1252" }
+
+[build-dependencies]
+winres = "0.1.12"
 
 [profile.release]
 lto = "thin"
