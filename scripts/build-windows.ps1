@@ -37,10 +37,17 @@ try {
     throw "Expected packaged application was not created: $packageRoot"
   }
 
+  # The association launcher lives beside bin/ and resources/. It stages a
+  # model plus related sidecar assets into the packaged frontend before
+  # starting the native shell, allowing Explorer/default-app launches to use
+  # the same Three.js loading path as drag/drop and the file picker.
+  Copy-Item (Join-Path $repo 'windows/open-model.ps1') (Join-Path $packageRoot 'open-model.ps1') -Force
+
   $packageExe = Join-Path $packageRoot 'bin/windows-3d-viewer.exe'
   $webViewLoader = Join-Path $packageRoot 'bin/WebView2Loader.dll'
   $frontendIndex = Join-Path $packageRoot 'resources/frontend/dist/index.html'
-  foreach ($required in @($packageExe, $webViewLoader, $frontendIndex)) {
+  $associationLauncher = Join-Path $packageRoot 'open-model.ps1'
+  foreach ($required in @($packageExe, $webViewLoader, $frontendIndex, $associationLauncher)) {
     if (-not (Test-Path $required)) { throw "Required packaged file is missing: $required" }
   }
 
@@ -48,7 +55,7 @@ try {
   Compress-Archive -Path $packageRoot -DestinationPath $zip -Force
 
   Write-Host "Portable Windows package: $zip"
-  Write-Host 'Important: keep bin/, resources/, and the executable together. Do not copy the EXE out of the package.'
+  Write-Host 'Important: keep bin/, resources/, open-model.ps1 and the executable together. Do not copy the EXE out of the package.'
 }
 finally {
   Pop-Location
