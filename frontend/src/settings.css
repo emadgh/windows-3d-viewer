@@ -243,6 +243,51 @@
 
 .association-status.error { color: #ff9c9c; }
 
+.instance-mode-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.instance-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid #354153;
+  border-radius: 10px;
+  background: #1b232e;
+  cursor: pointer;
+}
+
+.instance-mode-option:has(input:checked) {
+  border-color: rgba(110, 156, 255, .66);
+  background: rgba(54, 96, 184, .16);
+}
+
+.instance-mode-option input {
+  flex: 0 0 auto;
+  margin: 3px 0 0;
+  accent-color: #6e9cff;
+}
+
+.instance-mode-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.instance-mode-option strong {
+  color: #e7edf5;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.instance-mode-option small {
+  color: #8795a8;
+  font-size: 11px;
+}
+
 @keyframes updatePulse {
   0%, 100% { opacity: .58; transform: scale(.9); }
   50% { opacity: 1; transform: scale(1); }

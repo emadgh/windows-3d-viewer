@@ -175,6 +175,24 @@
           <div id="associationStatus" class="association-status" role="status" aria-live="polite"></div>
         </div>
       </div>
+
+      <div class="settings-section">
+        <div class="settings-copy">
+          <h3>Instance behavior</h3>
+          <p>Choose whether opening a model reuses the current window or starts a new one. Changes apply after restarting the app.</p>
+          <div class="instance-mode-options" role="radiogroup" aria-label="Application instance mode">
+            <label class="instance-mode-option">
+              <input id="singleInstanceRadio" type="radio" name="instanceMode" value="single" checked />
+              <span><strong>Single instance</strong><small>Open files in the existing window.</small></span>
+            </label>
+            <label class="instance-mode-option">
+              <input id="multipleInstancesRadio" type="radio" name="instanceMode" value="multiple" />
+              <span><strong>Multiple instances</strong><small>Open each file in a new window.</small></span>
+            </label>
+          </div>
+          <div id="instanceModeStatus" class="association-status" role="status" aria-live="polite"></div>
+        </div>
+      </div>
     </section>
   </div>
 

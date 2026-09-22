@@ -6,6 +6,9 @@ const closeButton = document.querySelector('#closeSettingsButton');
 const setDefaultButton = document.querySelector('#setDefaultButton');
 const openDefaultAppsButton = document.querySelector('#openDefaultAppsButton');
 const status = document.querySelector('#associationStatus');
+const singleInstanceRadio = document.querySelector('#singleInstanceRadio');
+const multipleInstancesRadio = document.querySelector('#multipleInstancesRadio');
+const instanceModeStatus = document.querySelector('#instanceModeStatus');
 
 const updaterSection = document.createElement('div');
 updaterSection.className = 'settings-section updater-section';
@@ -62,6 +65,11 @@ let lastUpdateState = null;
 function setAssociationStatus(message, isError = false) {
   status.textContent = message;
   status.classList.toggle('error', isError);
+}
+
+function setInstanceModeStatus(message, isError = false) {
+  instanceModeStatus.textContent = message;
+  instanceModeStatus.classList.toggle('error', isError);
 }
 
 async function invokeNative(command, payload = {}) {
@@ -181,9 +189,39 @@ function stopUpdatePolling() {
   }
 }
 
+async function refreshInstanceMode() {
+  try {
+    const data = await invokeNative('app.getInstanceMode');
+    const singleInstance = data?.singleInstance !== false;
+    singleInstanceRadio.checked = singleInstance;
+    multipleInstancesRadio.checked = !singleInstance;
+    setInstanceModeStatus(singleInstance
+      ? 'Single instance is active. Opening a model reuses this window.'
+      : 'Multiple instances is active.');
+  } catch (error) {
+    setInstanceModeStatus(error?.message || 'Could not read instance mode.', true);
+  }
+}
+
+async function saveInstanceMode(singleInstance) {
+  singleInstanceRadio.disabled = true;
+  multipleInstancesRadio.disabled = true;
+  try {
+    await invokeNative('app.setInstanceMode', { singleInstance });
+    setInstanceModeStatus('Saved. Restart the app to apply the new instance mode.');
+  } catch (error) {
+    setInstanceModeStatus(error?.message || 'Could not save instance mode.', true);
+    await refreshInstanceMode();
+  } finally {
+    singleInstanceRadio.disabled = false;
+    multipleInstancesRadio.disabled = false;
+  }
+}
+
 function showSettings() {
   modal.hidden = false;
   startUpdatePolling();
+  refreshInstanceMode();
   requestAnimationFrame(() => closeButton.focus());
 }
 
@@ -202,6 +240,14 @@ modal.addEventListener('click', (event) => {
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !modal.hidden) hideSettings();
+});
+
+singleInstanceRadio.addEventListener('change', () => {
+  if (singleInstanceRadio.checked) saveInstanceMode(true);
+});
+
+multipleInstancesRadio.addEventListener('change', () => {
+  if (multipleInstancesRadio.checked) saveInstanceMode(false);
 });
 
 checkUpdateButton.addEventListener('click', async () => {

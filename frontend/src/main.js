@@ -249,6 +249,11 @@ async function loadFiles(fileList) {
   }
 }
 
+// The native launch bridge calls this directly for Explorer/open-with files.
+// Keeping the loader independent from the hidden file input avoids WebView2
+// differences when assigning synthetic files to HTMLInputElement.files.
+window.__w3dvLoadFiles = loadFiles;
+
 async function loadModel(primary, files) {
   const ext = getExtension(primary.name);
   const sourceUrl = assetUrlMap.get(normalizePath(primary.name));

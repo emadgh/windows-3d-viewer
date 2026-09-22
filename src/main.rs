@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use tao::{
     dpi::LogicalSize,
     event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoopBuilder},
+    event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
     window::WindowBuilder,
 };
 use walkdir::WalkDir;
@@ -105,6 +105,7 @@ struct FrontendAssets;
 #[derive(Debug)]
 enum UserEvent {
     Bridge(String),
+    OpenFile(PathBuf),
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,15 +163,10 @@ fn is_supported_model(path: &Path) -> bool {
         .any(|(candidate, _)| candidate.trim_start_matches('.') == extension)
 }
 
-fn build_launch_state() -> Option<LaunchState> {
-    // Explorer passes the selected file as a normal quoted argument. Look for
-    // the first existing supported model instead of assuming it is the first
-    // non-option argument; this also tolerates future launch flags and avoids
-    // silently ignoring a valid path when an unrelated argument is present.
-    let requested = env::args_os()
-        .skip(1)
-        .map(PathBuf::from)
-        .find(|path| path.is_file() && is_supported_model(path))?;
+fn build_launch_state_for_path(requested: PathBuf) -> Option<LaunchState> {
+    if !requested.is_file() || !is_supported_model(&requested) {
+        return None;
+    }
 
     let primary_absolute = fs::canonicalize(&requested).ok()?;
     let source_root = primary_absolute.parent()?.to_path_buf();
@@ -213,6 +209,19 @@ fn build_launch_state() -> Option<LaunchState> {
 
     files[1..].sort_by(|left, right| left.relative.cmp(&right.relative));
     Some(LaunchState { primary, files })
+}
+
+fn build_launch_state() -> Option<LaunchState> {
+    // Explorer passes the selected file as a normal quoted argument. Look for
+    // the first existing supported model instead of assuming it is the first
+    // non-option argument; this also tolerates future launch flags and avoids
+    // silently ignoring a valid path when an unrelated argument is present.
+    let requested = env::args_os()
+        .skip(1)
+        .map(PathBuf::from)
+        .find(|path| path.is_file() && is_supported_model(path))?;
+
+    build_launch_state_for_path(requested)
 }
 
 fn mime_for(path: &str) -> String {
@@ -311,6 +320,211 @@ fn read_launch_file_chunk(state: &LaunchState, payload: &Value) -> Result<Value,
         "nextOffset": next_offset,
         "eof": next_offset >= length,
     }))
+}
+
+#[cfg(windows)]
+const INSTANCE_SETTINGS_RELATIVE: &str = r"Software\EmadGH\Windows3DViewer\Settings";
+#[cfg(windows)]
+const SINGLE_INSTANCE_MUTEX_NAME: &str = r"Local\EmadGH.Windows3DViewer.SingleInstance";
+#[cfg(windows)]
+const SINGLE_INSTANCE_EVENT_NAME: &str = r"Local\EmadGH.Windows3DViewer.OpenFile";
+#[cfg(windows)]
+const SINGLE_INSTANCE_PENDING_FILE: &str = "single-instance-open.txt";
+#[cfg(windows)]
+const INSTANCE_MODE_VALUE: &str = "SingleInstance";
+#[cfg(windows)]
+const ERROR_ALREADY_EXISTS: u32 = 183;
+#[cfg(windows)]
+const EVENT_MODIFY_STATE: u32 = 0x0002;
+#[cfg(windows)]
+const INFINITE: u32 = 0xffff_ffff;
+#[cfg(windows)]
+const WAIT_OBJECT_0: u32 = 0;
+
+#[cfg(windows)]
+enum SingleInstanceGuard {
+    Disabled,
+    Primary {
+        _mutex: isize,
+        _event: isize,
+        _pending_path: PathBuf,
+    },
+}
+
+#[cfg(windows)]
+fn wide_null(value: &str) -> Vec<u16> {
+    use std::{ffi::OsStr, iter::once, os::windows::ffi::OsStrExt};
+
+    OsStr::new(value).encode_wide().chain(once(0)).collect()
+}
+
+#[cfg(windows)]
+fn instance_pending_path() -> Result<PathBuf, String> {
+    let preferred = env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|path| path.join("Windows3DViewer"));
+    let fallback = env::temp_dir().join("Windows3DViewer");
+
+    for directory in preferred.into_iter().chain(std::iter::once(fallback)) {
+        if fs::create_dir_all(&directory).is_ok() {
+            return Ok(directory.join(SINGLE_INSTANCE_PENDING_FILE));
+        }
+    }
+
+    Err("Could not create a writable instance data directory.".to_string())
+}
+
+#[cfg(windows)]
+fn single_instance_enabled() -> bool {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    hkcu.open_subkey(INSTANCE_SETTINGS_RELATIVE)
+        .ok()
+        .and_then(|settings| settings.get_value::<u32, _>(INSTANCE_MODE_VALUE).ok())
+        .map(|value| value != 0)
+        .unwrap_or(true)
+}
+
+#[cfg(not(windows))]
+fn single_instance_enabled() -> bool {
+    true
+}
+
+#[cfg(windows)]
+fn set_single_instance_enabled(enabled: bool) -> Result<(), String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (settings, _) = hkcu
+        .create_subkey(INSTANCE_SETTINGS_RELATIVE)
+        .map_err(|error| format!("Could not save instance mode: {error}"))?;
+    settings
+        .set_value(INSTANCE_MODE_VALUE, &(enabled as u32))
+        .map_err(|error| format!("Could not save instance mode: {error}"))
+}
+
+#[cfg(not(windows))]
+fn set_single_instance_enabled(_enabled: bool) -> Result<(), String> {
+    Err("Instance mode is supported only on Windows.".to_string())
+}
+
+#[cfg(windows)]
+fn forward_to_primary_instance() -> Result<(), String> {
+    let pending_path = instance_pending_path()?;
+    let requested = env::args_os()
+        .skip(1)
+        .map(PathBuf::from)
+        .find(|path| path.is_file() && is_supported_model(path))
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    fs::write(&pending_path, requested.as_bytes())
+        .map_err(|error| format!("Could not queue file for the running instance: {error}"))?;
+
+    let event_name = wide_null(SINGLE_INSTANCE_EVENT_NAME);
+    for _ in 0..50 {
+        let event = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, event_name.as_ptr()) };
+        if !event.is_null() {
+            let signaled = unsafe { SetEvent(event) } != 0;
+            unsafe {
+                CloseHandle(event);
+            }
+            if signaled {
+                return Ok(());
+            }
+            return Err("Could not notify the running Windows 3D Viewer instance.".to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    Err("The running Windows 3D Viewer instance could not be reached.".to_string())
+}
+
+#[cfg(windows)]
+fn establish_single_instance(
+    proxy: &EventLoopProxy<UserEvent>,
+) -> Result<Option<SingleInstanceGuard>, String> {
+    if !single_instance_enabled() {
+        return Ok(Some(SingleInstanceGuard::Disabled));
+    }
+
+    let mutex_name = wide_null(SINGLE_INSTANCE_MUTEX_NAME);
+    let mutex = unsafe { CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr()) };
+    if mutex.is_null() {
+        return Err(format!(
+            "Could not create the single-instance mutex: {}",
+            unsafe { GetLastError() }
+        ));
+    }
+
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        unsafe {
+            CloseHandle(mutex);
+        }
+        forward_to_primary_instance()?;
+        return Ok(None);
+    }
+
+    let pending_path = instance_pending_path()?;
+    let _ = fs::remove_file(&pending_path);
+    let event_name = wide_null(SINGLE_INSTANCE_EVENT_NAME);
+    let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, event_name.as_ptr()) };
+    if event.is_null() {
+        unsafe {
+            CloseHandle(mutex);
+        }
+        return Err(format!(
+            "Could not create the single-instance event: {}",
+            unsafe { GetLastError() }
+        ));
+    }
+
+    let event_handle = event as isize;
+    let listener_path = pending_path.clone();
+    let listener_proxy = proxy.clone();
+    std::thread::spawn(move || loop {
+        let result =
+            unsafe { WaitForSingleObject(event_handle as *mut std::ffi::c_void, INFINITE) };
+        if result != WAIT_OBJECT_0 {
+            break;
+        }
+
+        let Ok(contents) = fs::read_to_string(&listener_path) else {
+            continue;
+        };
+        let _ = fs::remove_file(&listener_path);
+        let path = PathBuf::from(contents.trim());
+        if !path.as_os_str().is_empty() {
+            let _ = listener_proxy.send_event(UserEvent::OpenFile(path));
+        }
+    });
+
+    Ok(Some(SingleInstanceGuard::Primary {
+        _mutex: mutex as isize,
+        _event: event_handle,
+        _pending_path: pending_path,
+    }))
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateMutexW(
+        mutex_attributes: *const std::ffi::c_void,
+        initial_owner: i32,
+        name: *const u16,
+    ) -> *mut std::ffi::c_void;
+    fn CreateEventW(
+        event_attributes: *const std::ffi::c_void,
+        manual_reset: i32,
+        initial_state: i32,
+        name: *const u16,
+    ) -> *mut std::ffi::c_void;
+    fn OpenEventW(
+        desired_access: u32,
+        inherit_handle: i32,
+        name: *const u16,
+    ) -> *mut std::ffi::c_void;
+    fn SetEvent(event: *mut std::ffi::c_void) -> i32;
+    fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
+    fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    fn GetLastError() -> u32;
 }
 
 #[cfg(windows)]
@@ -623,6 +837,21 @@ fn dispatch_bridge(
             open_default_apps()?;
             Ok(json!({ "opened": true }))
         }
+        "app.getInstanceMode" => Ok(json!({
+            "singleInstance": single_instance_enabled(),
+        })),
+        "app.setInstanceMode" => {
+            let single_instance = request
+                .payload
+                .get("singleInstance")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "Missing singleInstance setting.".to_string())?;
+            set_single_instance_enabled(single_instance)?;
+            Ok(json!({
+                "singleInstance": single_instance,
+                "restartRequired": true,
+            }))
+        }
         "app.getUpdateStatus"
         | "app.checkForUpdates"
         | "app.downloadUpdate"
@@ -684,6 +913,12 @@ fn run_app() -> Result<(), Box<dyn Error>> {
     let event_loop = event_loop_builder.build();
     let proxy = event_loop.create_proxy();
 
+    #[cfg(windows)]
+    let instance_guard = match establish_single_instance(&proxy)? {
+        Some(guard) => guard,
+        None => return Ok(()),
+    };
+
     let window = WindowBuilder::new()
         .with_title(APP_NAME)
         .with_inner_size(LogicalSize::new(1400.0, 900.0))
@@ -713,6 +948,8 @@ fn run_app() -> Result<(), Box<dyn Error>> {
     let mut launch_state = build_launch_state();
     let updater = build_updater();
     start_initial_update_check(&updater);
+    #[cfg(windows)]
+    let _keep_instance_guard_alive = &instance_guard;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -723,6 +960,12 @@ fn run_app() -> Result<(), Box<dyn Error>> {
                 let script = bridge_response_script(&mut launch_state, &updater, &raw);
                 if !script.is_empty() {
                     let _ = webview.evaluate_script(&script);
+                }
+            }
+            Event::UserEvent(UserEvent::OpenFile(path)) => {
+                if let Some(state) = build_launch_state_for_path(path) {
+                    launch_state = Some(state);
+                    let _ = webview.evaluate_script("window.__w3dvOpenNativeLaunchFile?.();");
                 }
             }
             Event::WindowEvent {

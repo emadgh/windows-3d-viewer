@@ -89,7 +89,20 @@ async function consumeLaunchRequest() {
   }
 }
 
+let launchOpenInFlight = false;
+
 async function openNativeLaunchFile() {
+  if (launchOpenInFlight) return;
+  launchOpenInFlight = true;
+
+  try {
+    await openNativeLaunchFileInternal();
+  } finally {
+    launchOpenInFlight = false;
+  }
+}
+
+async function openNativeLaunchFileInternal() {
   if (!(await waitForNativeBridge())) return;
 
   let manifest;
@@ -113,13 +126,11 @@ async function openNativeLaunchFile() {
       files.push(await readNativeFile(relativePath));
     }
 
-    const input = document.querySelector('#fileInput');
-    if (!input) throw new Error('Viewer file input is unavailable.');
+    if (typeof window.__w3dvLoadFiles !== 'function') {
+      throw new Error('Viewer file loader is unavailable.');
+    }
 
-    const transfer = new DataTransfer();
-    files.forEach((file) => transfer.items.add(file));
-    input.files = transfer.files;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await window.__w3dvLoadFiles(files);
     await consumeLaunchRequest();
   } catch (error) {
     console.error('Could not open model supplied by Windows Explorer.', error);
@@ -127,6 +138,8 @@ async function openNativeLaunchFile() {
     if (status) status.textContent = `Could not open associated file: ${error?.message || error}`;
   }
 }
+
+window.__w3dvOpenNativeLaunchFile = openNativeLaunchFile;
 
 function scheduleNativeLaunchFile() {
   setTimeout(openNativeLaunchFile, 0);
