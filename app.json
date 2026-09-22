@@ -4,7 +4,7 @@
   "name": "windows-3d-viewer",
   "display_name": "Windows 3D Viewer",
   "description": "A fast local 3D model viewer for common interchange formats.",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "platforms": ["windows"],
   "permissions": [],
   "capabilities": ["webview", "js_bridge"],
