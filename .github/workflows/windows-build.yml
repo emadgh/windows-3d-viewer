@@ -2,7 +2,7 @@ name: Windows Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, rust-runtime-rewrite]
   workflow_dispatch:
 
 permissions:
@@ -22,24 +22,21 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Setup Zig 0.16.0
-        uses: mlugg/setup-zig@v2
+      - name: Setup Rust stable MSVC
+        uses: dtolnay/rust-toolchain@stable
         with:
-          version: '0.16.0'
-
-      - name: Install Native SDK CLI
-        shell: pwsh
-        run: npm install -g @native-sdk/cli@0.9.4
+          targets: x86_64-pc-windows-msvc
 
       - name: Show tool versions
         shell: pwsh
         run: |
           node --version
           npm --version
-          zig version
-          native version
+          rustc --version
+          cargo --version
+          rustup show active-toolchain
 
-      - name: Build single-file Windows app
+      - name: Build Rust single-file Windows app
         shell: pwsh
         run: ./scripts/build-windows.ps1
 
@@ -52,61 +49,48 @@ jobs:
           if ($files.Count -ne 1 -or $files[0].Name -ne 'windows-3d-viewer.exe') {
             throw 'dist must contain exactly one distributable file: windows-3d-viewer.exe'
           }
-          if ($exe.Path -notmatch '\.exe$') { throw 'Single-file executable was not produced.' }
-          Write-Host "Single-file output verified: $($exe.Path)"
+          if (Test-Path 'dist/WebView2Loader.dll') {
+            throw 'WebView2Loader.dll must not be distributed separately.'
+          }
+          Write-Host "Single Rust EXE verified: $($exe.Path)"
           Write-Host "Size: $((Get-Item $exe).Length) bytes"
 
-      - name: Smoke test embedded runtime
+      - name: Smoke test standalone EXE
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           Get-Process -Name 'windows-3d-viewer' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-          $runtimeRoot = Join-Path $env:LOCALAPPDATA 'Windows3DViewer/runtime'
-          if (Test-Path $runtimeRoot) { Remove-Item $runtimeRoot -Recurse -Force }
+          $errorLog = Join-Path $env:LOCALAPPDATA 'Windows3DViewer/startup-error.log'
+          if (Test-Path $errorLog) { Remove-Item $errorLog -Force }
 
           $exe = Resolve-Path 'dist/windows-3d-viewer.exe'
           $process = Start-Process -FilePath $exe -WorkingDirectory $env:RUNNER_TEMP -PassThru
           Start-Sleep -Seconds 8
           $process.Refresh()
-          if ($process.HasExited) {
-            $log = Join-Path $env:LOCALAPPDATA 'com.emadgh.windows3dviewer/Logs/native-sdk.jsonl'
-            if (Test-Path $log) {
-              Write-Host '--- Native SDK runtime log ---'
-              Get-Content $log -Tail 200
-            }
-            throw "Single-file app exited during startup smoke test with exit code $($process.ExitCode)."
-          }
 
-          $loader = Join-Path $runtimeRoot 'WebView2Loader.dll'
-          $index = Join-Path $runtimeRoot 'frontend/dist/index.html'
-          $launcher = Join-Path $runtimeRoot 'open-model.ps1'
-          foreach ($required in @($loader, $index, $launcher)) {
-            if (-not (Test-Path -LiteralPath $required)) { throw "Embedded runtime file was not extracted: $required" }
+          if ($process.HasExited) {
+            if (Test-Path $errorLog) {
+              Write-Host '--- Rust startup error log ---'
+              Get-Content $errorLog -Raw
+            }
+            throw "Standalone Rust app exited during startup smoke test with exit code $($process.ExitCode)."
           }
-          $indexText = Get-Content -LiteralPath $index -Raw
-          if ($indexText -notmatch 'settingsButton' -or $indexText -notmatch 'Set as default') {
-            throw 'Extracted frontend does not contain the production Settings UI.'
+          if (Test-Path $errorLog) {
+            Get-Content $errorLog -Raw
+            throw 'Rust runtime wrote a startup error log.'
           }
 
           Stop-Process -Id $process.Id -Force
-          Write-Host 'Embedded-runtime smoke test passed from an unrelated working directory.'
+          Write-Host 'Standalone Rust EXE stayed running from an unrelated working directory.'
 
-      - name: Verify file launcher and native bridge
+      - name: Smoke test model argument
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           Get-Process -Name 'windows-3d-viewer' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-          $exe = Resolve-Path 'dist/windows-3d-viewer.exe'
-          $runtimeRoot = Join-Path $env:LOCALAPPDATA 'Windows3DViewer/runtime'
-          $launcher = Join-Path $runtimeRoot 'open-model.ps1'
-          if (-not (Test-Path -LiteralPath $launcher)) { throw 'Embedded association launcher is missing.' }
-
-          $stageRoot = Join-Path $env:LOCALAPPDATA 'Windows3DViewer/launch-cache'
-          if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }
-
-          $sampleDir = Join-Path $env:RUNNER_TEMP 'windows-3d-viewer-sample'
+          $sampleDir = Join-Path $env:RUNNER_TEMP 'windows-3d-viewer-rust-sample'
           if (Test-Path $sampleDir) { Remove-Item $sampleDir -Recurse -Force }
           New-Item -ItemType Directory -Path $sampleDir -Force | Out-Null
           $sample = Join-Path $sampleDir 'association-smoke.stl'
@@ -122,70 +106,28 @@ jobs:
           endsolid association_smoke
           '@ | Set-Content -LiteralPath $sample -Encoding ascii
 
-          # Stage through the exact launcher embedded in the production EXE,
-          # but don't start the viewer yet. Otherwise the real frontend may
-          # consume launch.json before CI can inspect it, creating a race.
-          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $launcher $exe $sample -NoStart
-          if ($LASTEXITCODE -ne 0) { throw 'Embedded association launcher failed.' }
+          $errorLog = Join-Path $env:LOCALAPPDATA 'Windows3DViewer/startup-error.log'
+          if (Test-Path $errorLog) { Remove-Item $errorLog -Force }
 
-          $manifest = Join-Path $stageRoot 'launch.json'
-          $stagedModel = Join-Path $stageRoot 'association-smoke.stl'
-          if (-not (Test-Path $manifest)) { throw 'Association launcher did not write launch.json.' }
-          if (-not (Test-Path $stagedModel)) { throw 'Association launcher did not stage the model in LocalAppData.' }
+          $exe = Resolve-Path 'dist/windows-3d-viewer.exe'
+          $process = Start-Process -FilePath $exe -ArgumentList ('"' + $sample + '"') -WorkingDirectory $env:RUNNER_TEMP -PassThru
+          Start-Sleep -Seconds 8
+          $process.Refresh()
 
-          # Verify native bridge commands deterministically with Native SDK
-          # automation. The distributable EXE above remains the normal build.
-          $workspace = Resolve-Path '.native-workspace/windows-3d-viewer'
-          Push-Location $workspace
-          try {
-            if (Test-Path '.zig-cache/native-sdk-automation') {
-              Remove-Item '.zig-cache/native-sdk-automation' -Recurse -Force
+          if ($process.HasExited) {
+            if (Test-Path $errorLog) {
+              Write-Host '--- Rust startup error log ---'
+              Get-Content $errorLog -Raw
             }
-
-            native build -Dautomation=true
-            if ($LASTEXITCODE -ne 0) { throw 'Automation-enabled verification build failed.' }
-
-            $automationExe = Resolve-Path 'zig-out/bin/windows-3d-viewer.exe'
-            # Native SDK automation publishes its snapshot relative to the app
-            # workspace, so automation builds must run from this directory.
-            $automationProcess = Start-Process -FilePath $automationExe -WorkingDirectory $workspace -PassThru
-            try {
-              native automate wait
-              if ($LASTEXITCODE -ne 0) { throw 'Native SDK automation did not become ready.' }
-
-              $manifestRequest = '{"id":"manifest","command":"app.getLaunchManifest","payload":{}}'
-              $manifestResponse = (& native automate bridge $manifestRequest 2>&1 | Out-String)
-              Write-Host $manifestResponse
-              if ($LASTEXITCODE -ne 0 -or $manifestResponse -notmatch '"ok":true' -or $manifestResponse -notmatch 'association-smoke\.stl') {
-                throw 'app.getLaunchManifest did not return the staged STL.'
-              }
-
-              $chunkRequest = '{"id":"chunk","command":"app.readLaunchFileChunk","payload":{"path":"association-smoke.stl","offset":0}}'
-              $chunkResponse = (& native automate bridge $chunkRequest 2>&1 | Out-String)
-              Write-Host $chunkResponse
-              if ($LASTEXITCODE -ne 0 -or $chunkResponse -notmatch '"ok":true' -or $chunkResponse -notmatch '"data":"[A-Za-z0-9+/=]+"') {
-                throw 'app.readLaunchFileChunk did not return model bytes.'
-              }
-
-              $consumeRequest = '{"id":"consume","command":"app.consumeLaunchRequest","payload":{}}'
-              $consumeResponse = (& native automate bridge $consumeRequest 2>&1 | Out-String)
-              Write-Host $consumeResponse
-              if ($LASTEXITCODE -ne 0 -or $consumeResponse -notmatch '"ok":true') {
-                throw 'app.consumeLaunchRequest failed.'
-              }
-            }
-            finally {
-              if ($automationProcess -and -not $automationProcess.HasExited) {
-                Stop-Process -Id $automationProcess.Id -Force -ErrorAction SilentlyContinue
-              }
-            }
+            throw "Rust app exited while opening an STL argument with exit code $($process.ExitCode)."
           }
-          finally {
-            Pop-Location
+          if (Test-Path $errorLog) {
+            Get-Content $errorLog -Raw
+            throw 'Rust runtime wrote a startup error while opening an STL argument.'
           }
 
-          if (Test-Path $manifest) { throw 'Launch manifest still exists after native bridge consume.' }
-          Write-Host 'Association verification passed for the single-file build.'
+          Stop-Process -Id $process.Id -Force
+          Write-Host 'Model-argument smoke test passed.'
 
       - name: List artifact
         shell: pwsh
@@ -194,7 +136,7 @@ jobs:
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
-          name: windows-3d-viewer-windows-x64-single-exe
+          name: windows-3d-viewer-windows-x64-rust-single-exe
           path: dist/windows-3d-viewer.exe
           if-no-files-found: error
           retention-days: 30
