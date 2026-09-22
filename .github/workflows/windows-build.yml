@@ -146,7 +146,9 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Automation-enabled verification build failed.' }
 
             $automationExe = Resolve-Path 'zig-out/bin/windows-3d-viewer.exe'
-            $automationProcess = Start-Process -FilePath $automationExe -WorkingDirectory $env:RUNNER_TEMP -PassThru
+            # Native SDK automation publishes its snapshot relative to the app
+            # workspace, so automation builds must run from this directory.
+            $automationProcess = Start-Process -FilePath $automationExe -WorkingDirectory $workspace -PassThru
             try {
               native automate wait
               if ($LASTEXITCODE -ne 0) { throw 'Native SDK automation did not become ready.' }
