@@ -78,6 +78,9 @@ jobs:
           $packageRoot = Get-ChildItem $smoke -Directory | Where-Object { $_.Name -eq 'windows-3d-viewer-windows' } | Select-Object -First 1
           if (-not $packageRoot) { throw 'Packaged application root not found.' }
 
+          $stageRoot = Join-Path $env:LOCALAPPDATA 'Windows3DViewer/launch-cache'
+          if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }
+
           $sampleDir = Join-Path $env:RUNNER_TEMP 'windows-3d-viewer-sample'
           New-Item -ItemType Directory -Path $sampleDir -Force | Out-Null
           $sample = Join-Path $sampleDir 'association-smoke.stl'
@@ -102,20 +105,24 @@ jobs:
             throw 'Explorer-launch smoke test did not leave the viewer process running.'
           }
 
-          $stageRoot = Join-Path $packageRoot.FullName 'resources/frontend/dist/__open__'
           $manifest = Join-Path $stageRoot 'launch.json'
           $stagedModel = Join-Path $stageRoot 'association-smoke.stl'
           if (-not (Test-Path $stagedModel)) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw 'Association launcher did not stage the model.'
+            throw 'Association launcher did not stage the model in LocalAppData.'
           }
           if (Test-Path $manifest) {
+            $log = Join-Path $env:LOCALAPPDATA 'com.emadgh.windows3dviewer/Logs/native-sdk.jsonl'
+            if (Test-Path $log) {
+              Write-Host '--- Native SDK runtime log ---'
+              Get-Content $log -Tail 200
+            }
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw 'Launch request was not consumed by the WebView/native bridge.'
+            throw 'Launch request was not consumed by the WebView/native chunk bridge.'
           }
 
           Stop-Process -Id $process.Id -Force
-          Write-Host 'Explorer association smoke test passed: staged STL was handed to the running viewer.'
+          Write-Host 'Explorer association smoke test passed: staged STL was streamed to the running viewer.'
 
       - name: List artifacts
         shell: pwsh
