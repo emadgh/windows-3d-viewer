@@ -1,0 +1,56 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Setup Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: '0.16.0'
+
+      - name: Install Native SDK CLI
+        shell: pwsh
+        run: npm install -g @native-sdk/cli@0.9.4
+
+      - name: Show tool versions
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+          zig version
+          native version
+
+      - name: Build and package Windows app
+        shell: pwsh
+        run: ./scripts/build-windows.ps1
+
+      - name: List artifacts
+        shell: pwsh
+        run: Get-ChildItem -Recurse dist | Format-Table FullName, Length
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-3d-viewer-windows-x64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
