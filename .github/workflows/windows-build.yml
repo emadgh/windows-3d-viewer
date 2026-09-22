@@ -39,21 +39,34 @@ jobs:
           zig version
           native version
 
-      - name: Build and package Windows app
+      - name: Build single-file Windows app
         shell: pwsh
         run: ./scripts/build-windows.ps1
 
-      - name: Smoke test packaged app
+      - name: Verify single-file output
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $zip = Resolve-Path 'dist/windows-3d-viewer-windows-x64.zip'
-          $smoke = Join-Path $env:RUNNER_TEMP 'windows-3d-viewer-smoke'
-          if (Test-Path $smoke) { Remove-Item $smoke -Recurse -Force }
-          Expand-Archive -Path $zip -DestinationPath $smoke -Force
-          $exe = Get-ChildItem $smoke -Recurse -Filter 'windows-3d-viewer.exe' | Select-Object -First 1
-          if (-not $exe) { throw 'Packaged EXE not found after extraction.' }
-          $process = Start-Process -FilePath $exe.FullName -WorkingDirectory $exe.DirectoryName -PassThru
+          $exe = Resolve-Path 'dist/windows-3d-viewer.exe'
+          $files = @(Get-ChildItem -LiteralPath 'dist' -File)
+          if ($files.Count -ne 1 -or $files[0].Name -ne 'windows-3d-viewer.exe') {
+            throw 'dist must contain exactly one distributable file: windows-3d-viewer.exe'
+          }
+          if ($exe.Path -notmatch '\.exe$') { throw 'Single-file executable was not produced.' }
+          Write-Host "Single-file output verified: $($exe.Path)"
+          Write-Host "Size: $((Get-Item $exe).Length) bytes"
+
+      - name: Smoke test embedded runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-Process -Name 'windows-3d-viewer' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+          $runtimeRoot = Join-Path $env:LOCALAPPDATA 'Windows3DViewer/runtime'
+          if (Test-Path $runtimeRoot) { Remove-Item $runtimeRoot -Recurse -Force }
+
+          $exe = Resolve-Path 'dist/windows-3d-viewer.exe'
+          $process = Start-Process -FilePath $exe -WorkingDirectory $env:RUNNER_TEMP -PassThru
           Start-Sleep -Seconds 8
           $process.Refresh()
           if ($process.HasExited) {
@@ -62,23 +75,33 @@ jobs:
               Write-Host '--- Native SDK runtime log ---'
               Get-Content $log -Tail 200
             }
-            throw "Packaged app exited during startup smoke test with exit code $($process.ExitCode)."
+            throw "Single-file app exited during startup smoke test with exit code $($process.ExitCode)."
           }
-          Stop-Process -Id $process.Id -Force
-          Write-Host 'Startup smoke test passed: production package stayed running.'
 
-      - name: Verify Explorer launcher and native bridge
+          $loader = Join-Path $runtimeRoot 'WebView2Loader.dll'
+          $index = Join-Path $runtimeRoot 'frontend/dist/index.html'
+          $launcher = Join-Path $runtimeRoot 'open-model.ps1'
+          foreach ($required in @($loader, $index, $launcher)) {
+            if (-not (Test-Path -LiteralPath $required)) { throw "Embedded runtime file was not extracted: $required" }
+          }
+          $indexText = Get-Content -LiteralPath $index -Raw
+          if ($indexText -notmatch 'settingsButton' -or $indexText -notmatch 'Set as default') {
+            throw 'Extracted frontend does not contain the production Settings UI.'
+          }
+
+          Stop-Process -Id $process.Id -Force
+          Write-Host 'Embedded-runtime smoke test passed from an unrelated working directory.'
+
+      - name: Verify file launcher and native bridge
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           Get-Process -Name 'windows-3d-viewer' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-          $zip = Resolve-Path 'dist/windows-3d-viewer-windows-x64.zip'
-          $smoke = Join-Path $env:RUNNER_TEMP 'windows-3d-viewer-association-smoke'
-          if (Test-Path $smoke) { Remove-Item $smoke -Recurse -Force }
-          Expand-Archive -Path $zip -DestinationPath $smoke -Force
-          $packageRoot = Get-ChildItem $smoke -Directory | Where-Object { $_.Name -eq 'windows-3d-viewer-windows' } | Select-Object -First 1
-          if (-not $packageRoot) { throw 'Packaged application root not found.' }
+          $exe = Resolve-Path 'dist/windows-3d-viewer.exe'
+          $runtimeRoot = Join-Path $env:LOCALAPPDATA 'Windows3DViewer/runtime'
+          $launcher = Join-Path $runtimeRoot 'open-model.ps1'
+          if (-not (Test-Path -LiteralPath $launcher)) { throw 'Embedded association launcher is missing.' }
 
           $stageRoot = Join-Path $env:LOCALAPPDATA 'Windows3DViewer/launch-cache'
           if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }
@@ -99,25 +122,21 @@ jobs:
           endsolid association_smoke
           '@ | Set-Content -LiteralPath $sample -Encoding ascii
 
-          # Exercise the exact launcher shipped in the production ZIP. It
-          # stages the requested model and starts the production executable.
-          $launcher = Join-Path $packageRoot.FullName 'open-model.ps1'
-          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $launcher $sample
+          # Exercise the exact launcher extracted from the single EXE.
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $launcher $exe $sample
           Start-Sleep -Seconds 3
 
           $productionProcess = Get-Process -Name 'windows-3d-viewer' -ErrorAction SilentlyContinue | Sort-Object StartTime -Descending | Select-Object -First 1
-          if (-not $productionProcess) { throw 'Explorer launcher did not start the production viewer.' }
+          if (-not $productionProcess) { throw 'Association launcher did not start the production viewer.' }
 
           $manifest = Join-Path $stageRoot 'launch.json'
           $stagedModel = Join-Path $stageRoot 'association-smoke.stl'
-          if (-not (Test-Path $manifest)) { throw 'Explorer launcher did not write launch.json.' }
-          if (-not (Test-Path $stagedModel)) { throw 'Explorer launcher did not stage the model in LocalAppData.' }
+          if (-not (Test-Path $manifest)) { throw 'Association launcher did not write launch.json.' }
+          if (-not (Test-Path $stagedModel)) { throw 'Association launcher did not stage the model in LocalAppData.' }
           Stop-Process -Id $productionProcess.Id -Force -ErrorAction SilentlyContinue
 
-          # GitHub hosted Windows runners do not reliably execute arbitrary
-          # WebView DOM JavaScript. Verify the native half deterministically
-          # through Native SDK's own automation bridge instead. The final ZIP
-          # above remains the normal production build without automation.
+          # Verify native bridge commands deterministically with Native SDK
+          # automation. The distributable EXE above remains the normal build.
           $workspace = Resolve-Path '.native-workspace/windows-3d-viewer'
           Push-Location $workspace
           try {
@@ -129,7 +148,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Automation-enabled verification build failed.' }
 
             $automationExe = Resolve-Path 'zig-out/bin/windows-3d-viewer.exe'
-            $automationProcess = Start-Process -FilePath $automationExe -WorkingDirectory $workspace -PassThru
+            $automationProcess = Start-Process -FilePath $automationExe -WorkingDirectory $env:RUNNER_TEMP -PassThru
             try {
               native automate wait
               if ($LASTEXITCODE -ne 0) { throw 'Native SDK automation did not become ready.' }
@@ -166,16 +185,16 @@ jobs:
           }
 
           if (Test-Path $manifest) { throw 'Launch manifest still exists after native bridge consume.' }
-          Write-Host 'Association verification passed: launcher staged the STL and the native bridge read/consumed it.'
+          Write-Host 'Association verification passed for the single-file build.'
 
-      - name: List artifacts
+      - name: List artifact
         shell: pwsh
-        run: Get-ChildItem -Recurse dist | Format-Table FullName, Length
+        run: Get-Item 'dist/windows-3d-viewer.exe' | Format-Table FullName, Length
 
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
-          name: windows-3d-viewer-windows-x64
-          path: dist/windows-3d-viewer-windows-x64.zip
+          name: windows-3d-viewer-windows-x64-single-exe
+          path: dist/windows-3d-viewer.exe
           if-no-files-found: error
           retention-days: 30
