@@ -2,7 +2,7 @@ name: Windows Build
 
 on:
   push:
-    branches: [main, release-v0.5.0-updater]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
