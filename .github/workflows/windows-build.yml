@@ -43,6 +43,30 @@ jobs:
         shell: pwsh
         run: ./scripts/build-windows.ps1
 
+      - name: Smoke test packaged app
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Resolve-Path 'dist/windows-3d-viewer-windows-x64.zip'
+          $smoke = Join-Path $env:RUNNER_TEMP 'windows-3d-viewer-smoke'
+          if (Test-Path $smoke) { Remove-Item $smoke -Recurse -Force }
+          Expand-Archive -Path $zip -DestinationPath $smoke -Force
+          $exe = Get-ChildItem $smoke -Recurse -Filter 'windows-3d-viewer.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'Packaged EXE not found after extraction.' }
+          $process = Start-Process -FilePath $exe.FullName -WorkingDirectory $exe.DirectoryName -PassThru
+          Start-Sleep -Seconds 8
+          $process.Refresh()
+          if ($process.HasExited) {
+            $log = Join-Path $env:LOCALAPPDATA 'com.emadgh.windows3dviewer/Logs/native-sdk.jsonl'
+            if (Test-Path $log) {
+              Write-Host '--- Native SDK runtime log ---'
+              Get-Content $log -Tail 200
+            }
+            throw "Packaged app exited during startup smoke test with exit code $($process.ExitCode)."
+          }
+          Stop-Process -Id $process.Id -Force
+          Write-Host 'Startup smoke test passed: application stayed running.'
+
       - name: List artifacts
         shell: pwsh
         run: Get-ChildItem -Recurse dist | Format-Table FullName, Length
@@ -51,6 +75,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-3d-viewer-windows-x64
-          path: dist/*
+          path: dist/windows-3d-viewer-windows-x64.zip
           if-no-files-found: error
           retention-days: 30
