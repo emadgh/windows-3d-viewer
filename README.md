@@ -1,10 +1,13 @@
 # Windows 3D Viewer
 
-A Windows desktop 3D file viewer built with [Native SDK](https://native-sdk.dev/) for the native shell and WebView2 hosting, with [Three.js](https://threejs.org/) for 3D rendering.
+A lightweight Windows desktop 3D file viewer with a Rust native host and an embedded Vite/Three.js frontend.
+
+The distributable is a single `windows-3d-viewer.exe`. The production frontend, Draco decoder, Basis/KTX2 decoder and WebView host code are compiled into the executable; there is no application `resources` directory and no separate `WebView2Loader.dll` to ship.
 
 ## Features
 
 - Local file loading by file picker or drag-and-drop
+- Open supported models directly from Windows Explorer / Default Apps
 - Multi-file loading for external textures, `.bin`, and `.mtl` dependencies
 - Formats: GLB, GLTF, FBX, OBJ/MTL, STL, PLY, DAE, 3MF, 3DS, USDZ, VRML/WRL
 - glTF Draco, Meshopt, and KTX2/Basis decoding
@@ -21,21 +24,23 @@ A Windows desktop 3D file viewer built with [Native SDK](https://native-sdk.dev/
 
 ## Stack
 
-- Native SDK `0.9.4`
-- Windows system WebView2 backend
+- Rust native host
+- Wry `0.57` / Windows WebView2
+- Tao `0.37`
+- `rust-embed` for compiling the production frontend into the EXE
 - Three.js `0.186.0`
 - Vite `8.3.0`
 
-The repository keeps the application-specific source small and reproducible. The PowerShell scripts ask the Native SDK CLI to scaffold the matching Vite/WebView native shell into `.native-workspace/`, replace its frontend and manifest with this repository's source, then run the normal Native SDK build/package commands. This avoids committing a generated `build.zig` that can drift from the installed Native SDK version.
+The web application under `frontend/` remains independent of the native host. The Rust WebView injects a small compatibility bridge implementing the existing `window.zero.invoke(...)` interface, so the frontend does not depend on Rust-specific APIs.
 
 ## Development
 
 Requirements:
 
 - Windows 10/11
+- Microsoft Edge WebView2 Runtime
+- Rust stable with the MSVC toolchain
 - Node.js 24+
-- Native SDK CLI: `npm install -g @native-sdk/cli@0.9.4`
-- Zig 0.16.0 (or let Native SDK manage its pinned toolchain)
 
 Run:
 
@@ -43,27 +48,45 @@ Run:
 ./scripts/dev.ps1
 ```
 
+The development script builds the frontend and starts the Rust host with `cargo run`.
+
 ## Windows release build
 
 ```powershell
 ./scripts/build-windows.ps1
 ```
 
-Artifacts are written to `dist/`:
+The only distributable written to `dist/` is:
 
-- `windows-3d-viewer.exe`
-- `windows-3d-viewer-windows-x64.zip` (packaged Native SDK output, including the WebView support files)
+```text
+dist/windows-3d-viewer.exe
+```
+
+The release target is `x86_64-pc-windows-msvc`. Wry/WebView2 uses the MSVC static WebView2 loader, so `WebView2Loader.dll` does not need to sit beside the executable.
+
+## Opening models from Explorer
+
+The Settings dialog can register Windows 3D Viewer for the supported file formats. Windows still requires the user to confirm the final default-app selection in Default Apps.
+
+The registered shell command launches the EXE directly with the selected file path:
+
+```text
+"windows-3d-viewer.exe" "%1"
+```
+
+No PowerShell launcher or temporary launch manifest is required. Rust reads the selected model directly and exposes the model plus related sidecar files to the existing frontend through the native bridge.
 
 ## Loading models with external files
 
-For formats that reference external resources, select or drop the model together with its related files in one operation. For example:
+For a model opened from Explorer, the Rust host makes common sidecar assets from the model directory tree available to the frontend, including `.bin`, `.mtl`, image textures, DDS, KTX2, HDR and EXR files.
 
-- `scene.gltf` + `scene.bin` + texture images
-- `model.obj` + `model.mtl` + texture images
-- `model.fbx` + external texture images
+For files selected or dropped inside the viewer, the existing frontend loading behavior remains unchanged.
 
-The viewer maps dependency requests back to the selected local files by relative path and file name.
+## Architecture
 
-## Notes
+The repository intentionally separates the two layers:
 
-The Windows package uses the system WebView2 runtime. Current Windows 10/11 installations normally have the Evergreen WebView2 runtime; Native SDK packages its required loader alongside the app.
+- `src/main.rs` — Rust window/WebView host, native bridge, file associations and model-file access
+- `frontend/` — unchanged Vite/Three.js viewer UI and rendering code
+
+The previous Zig / Native SDK host, Native SDK manifests and PowerShell association launcher have been removed.
