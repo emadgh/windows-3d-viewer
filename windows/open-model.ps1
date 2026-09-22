@@ -3,7 +3,9 @@ param(
   [string]$Executable,
 
   [Parameter(Mandatory = $true, Position = 1)]
-  [string]$ModelPath
+  [string]$ModelPath,
+
+  [switch]$NoStart
 )
 
 $ErrorActionPreference = 'Stop'
@@ -63,4 +65,6 @@ $json = $manifest | ConvertTo-Json -Depth 4
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($launchManifest, $json, $utf8NoBom)
 
-Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)
+if (-not $NoStart) {
+  Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)
+}
