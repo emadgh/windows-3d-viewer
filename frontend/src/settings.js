@@ -1,4 +1,5 @@
 import './settings.css';
+import './startup-file.js';
 
 const settingsButton = document.querySelector('#settingsButton');
 const modal = document.querySelector('#settingsModal');
