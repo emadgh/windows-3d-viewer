@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' blob: data:; worker-src 'self' blob:; font-src 'self' data:;" />
+  <title>Windows 3D Viewer</title>
+</head>
+<body>
+  <div id="app">
+    <header class="toolbar">
+      <div class="brand">3D Viewer</div>
+      <button id="openButton" class="primary">Open model</button>
+      <input id="fileInput" type="file" hidden multiple accept=".glb,.gltf,.fbx,.obj,.mtl,.stl,.ply,.dae,.3mf,.3ds,.usdz,.wrl,.vrml,.bin,.png,.jpg,.jpeg,.webp,.bmp,.tga,.dds,.ktx2" />
+      <button id="fitButton" title="Fit model in view">Fit</button>
+      <button id="resetButton" title="Reset camera">Reset</button>
+      <span class="separator"></span>
+      <label class="control-label">Mode
+        <select id="modeSelect">
+          <option value="textured-lighting">Textured + Lighting</option>
+          <option value="textured">Textured</option>
+          <option value="clay">Clay</option>
+          <option value="wireframe">Wireframe</option>
+        </select>
+      </label>
+      <label class="toggle"><input id="lightingToggle" type="checkbox" checked /> Lighting</label>
+      <label class="toggle"><input id="shadowsToggle" type="checkbox" checked /> Shadows</label>
+      <label class="toggle"><input id="wireToggle" type="checkbox" /> Wire overlay</label>
+      <label class="toggle"><input id="gridToggle" type="checkbox" checked /> Grid</label>
+      <label class="toggle"><input id="axesToggle" type="checkbox" /> Axes</label>
+      <label class="toggle"><input id="autorotateToggle" type="checkbox" /> Auto rotate</label>
+      <span class="spacer"></span>
+      <button id="screenshotButton" title="Save viewport as PNG">Screenshot</button>
+    </header>
+
+    <main class="workspace">
+      <section id="viewport" class="viewport">
+        <div id="emptyState" class="empty-state">
+          <div class="empty-icon">◇</div>
+          <h1>Drop a 3D model here</h1>
+          <p>GLB, GLTF, FBX, OBJ, STL, PLY, DAE, 3MF, 3DS, USDZ and VRML</p>
+          <p class="muted">Select related texture / MTL / BIN files together when needed.</p>
+          <button id="emptyOpenButton" class="primary">Choose files</button>
+        </div>
+        <div id="dropOverlay" class="drop-overlay">Drop files to open</div>
+        <div id="viewportBadge" class="viewport-badge">Ready</div>
+      </section>
+
+      <aside class="sidebar">
+        <section class="panel model-panel">
+          <div class="panel-title">Model</div>
+          <div id="modelName" class="model-name">No model loaded</div>
+          <div class="stats-grid">
+            <span>Meshes</span><strong id="meshCount">—</strong>
+            <span>Vertices</span><strong id="vertexCount">—</strong>
+            <span>Triangles</span><strong id="triangleCount">—</strong>
+            <span>Animations</span><strong id="animationCount">—</strong>
+          </div>
+        </section>
+
+        <section id="animationPanel" class="panel" hidden>
+          <div class="panel-title">Animation</div>
+          <select id="animationSelect"></select>
+          <div class="row gap">
+            <button id="playPauseButton">Pause</button>
+            <button id="restartAnimationButton">Restart</button>
+          </div>
+        </section>
+
+        <section class="panel tree-panel">
+          <div class="panel-title row">
+            <span>Scene objects</span>
+            <button id="clearIsolationButton" class="ghost small" hidden>Show all</button>
+          </div>
+          <input id="treeSearch" class="search" placeholder="Filter objects…" />
+          <div id="objectTree" class="object-tree">
+            <div class="tree-empty">Open a model to inspect its objects.</div>
+          </div>
+        </section>
+
+        <section class="panel help-panel">
+          <div class="panel-title">Controls</div>
+          <div class="help-row"><span>Rotate</span><kbd>Left drag</kbd></div>
+          <div class="help-row"><span>Pan</span><kbd>Right drag</kbd></div>
+          <div class="help-row"><span>Zoom</span><kbd>Wheel</kbd></div>
+          <div class="help-row"><span>Focus object</span><kbd>Click name</kbd></div>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="statusbar">
+      <span id="statusText">Ready</span>
+      <span class="spacer"></span>
+      <span id="formatText">No file</span>
+    </footer>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
