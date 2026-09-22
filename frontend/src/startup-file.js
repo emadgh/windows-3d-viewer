@@ -18,26 +18,57 @@ function extensionOf(name) {
   return index >= 0 ? String(name).slice(index + 1).toLowerCase() : '';
 }
 
-function encodedRelativeUrl(relativePath) {
-  const safePath = String(relativePath)
-    .replace(/\\/g, '/')
-    .split('/')
-    .filter(Boolean)
-    .map((segment) => encodeURIComponent(segment))
-    .join('/');
-  return new URL(`./__open__/${safePath}`, document.baseURI);
+function basenameOf(path) {
+  return String(path).replace(/\\/g, '/').split('/').pop();
 }
 
-async function stagedFile(relativePath) {
-  const response = await fetch(encodedRelativeUrl(relativePath), { cache: 'no-store' });
-  if (!response.ok) throw new Error(`Could not read staged file: ${relativePath}`);
-  const blob = await response.blob();
-  const basename = String(relativePath).replace(/\\/g, '/').split('/').pop();
-  const type = blob.type || MODEL_MIME_TYPES[extensionOf(basename)] || '';
-  const file = new File([blob], basename, { type, lastModified: Date.now() });
+async function waitForNativeBridge(timeoutMs = 8000) {
+  const started = performance.now();
+  while (performance.now() - started < timeoutMs) {
+    if (window.zero?.invoke) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+}
 
-  // The existing viewer uses webkitRelativePath when present to resolve
-  // glTF/OBJ/DAE sidecars. Chromium permits defining it on synthetic Files.
+function decodeBase64(value) {
+  const binary = atob(value || '');
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+async function readNativeFile(relativePath) {
+  const parts = [];
+  let offset = 0;
+  let iterations = 0;
+
+  while (true) {
+    const chunk = await window.zero.invoke('app.readLaunchFileChunk', {
+      path: relativePath,
+      offset,
+    });
+
+    const bytes = decodeBase64(chunk?.data);
+    if (bytes.length) parts.push(bytes);
+
+    if (chunk?.eof) break;
+    const nextOffset = Number(chunk?.nextOffset);
+    if (!Number.isFinite(nextOffset) || nextOffset <= offset) {
+      throw new Error(`Invalid chunk response while reading ${relativePath}`);
+    }
+
+    offset = nextOffset;
+    iterations += 1;
+    if (iterations > 200000) throw new Error(`Too many chunks while reading ${relativePath}`);
+  }
+
+  const name = basenameOf(relativePath);
+  const type = MODEL_MIME_TYPES[extensionOf(name)] || '';
+  const file = new File(parts, name, { type, lastModified: Date.now() });
+
   try {
     Object.defineProperty(file, 'webkitRelativePath', {
       configurable: true,
@@ -52,33 +83,34 @@ async function stagedFile(relativePath) {
 
 async function consumeLaunchRequest() {
   try {
-    await window.zero?.invoke?.('app.consumeLaunchRequest');
+    await window.zero.invoke('app.consumeLaunchRequest', {});
   } catch (error) {
     console.warn('Could not consume launch request.', error);
   }
 }
 
-async function openStagedLaunchFile() {
-  let response;
+async function openNativeLaunchFile() {
+  if (!(await waitForNativeBridge())) return;
+
+  let manifest;
   try {
-    response = await fetch(new URL('./__open__/launch.json', document.baseURI), { cache: 'no-store' });
-  } catch {
+    manifest = await window.zero.invoke('app.getLaunchManifest', {});
+  } catch (error) {
+    console.warn('Could not query launch request.', error);
     return;
   }
 
-  if (!response.ok) return;
+  if (!manifest?.primary || !Array.isArray(manifest.files) || !manifest.files.length) return;
 
   try {
-    const manifest = await response.json();
-    if (!manifest?.primary || !Array.isArray(manifest.files) || !manifest.files.length) return;
-
     const orderedPaths = [
       manifest.primary,
       ...manifest.files.filter((path) => path !== manifest.primary),
     ];
     const files = [];
+
     for (const relativePath of orderedPaths) {
-      files.push(await stagedFile(relativePath));
+      files.push(await readNativeFile(relativePath));
     }
 
     const input = document.querySelector('#fileInput');
@@ -97,5 +129,5 @@ async function openStagedLaunchFile() {
 }
 
 window.addEventListener('load', () => {
-  setTimeout(openStagedLaunchFile, 0);
+  setTimeout(openNativeLaunchFile, 0);
 }, { once: true });
