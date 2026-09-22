@@ -19,7 +19,7 @@ if (-not (Test-Path -LiteralPath $exe)) { throw "Viewer executable not found: $e
 if (-not (Test-Path -LiteralPath $ModelPath)) { throw "Model file not found: $ModelPath" }
 
 $model = Get-Item -LiteralPath $ModelPath
-$sourceRoot = $model.Directory.FullName
+$sourceRoot = $model.Directory.FullName.TrimEnd('\', '/')
 
 if (Test-Path -LiteralPath $stageRoot) {
   Remove-Item -LiteralPath $stageRoot -Recurse -Force
@@ -38,7 +38,7 @@ $assetExtensions = @(
   '.gif', '.hdr', '.exr'
 )
 
-$manifestFiles = [System.Collections.Generic.List[string]]::new()
+$manifestFiles = New-Object 'System.Collections.Generic.List[string]'
 $manifestFiles.Add($model.Name)
 
 Get-ChildItem -LiteralPath $sourceRoot -Recurse -File -ErrorAction SilentlyContinue |
@@ -47,7 +47,9 @@ Get-ChildItem -LiteralPath $sourceRoot -Recurse -File -ErrorAction SilentlyConti
     $assetExtensions -contains $_.Extension.ToLowerInvariant()
   } |
   ForEach-Object {
-    $relative = [System.IO.Path]::GetRelativePath($sourceRoot, $_.FullName)
+    # Avoid System.IO.Path.GetRelativePath, which is unavailable in the
+    # .NET Framework used by Windows PowerShell 5.1 on many Windows 10/11 PCs.
+    $relative = $_.FullName.Substring($sourceRoot.Length).TrimStart('\', '/')
     $destination = Join-Path $stageRoot $relative
     $destinationDirectory = Split-Path -Parent $destination
     New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
@@ -61,7 +63,7 @@ $manifest = [ordered]@{
   createdUtc = [DateTime]::UtcNow.ToString('o')
 }
 $json = $manifest | ConvertTo-Json -Depth 4
-$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($launchManifest, $json, $utf8NoBom)
 
 Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)
