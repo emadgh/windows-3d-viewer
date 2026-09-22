@@ -3,7 +3,7 @@
     .name = "windows-3d-viewer",
     .display_name = "Windows 3D Viewer",
     .description = "A fast local 3D model viewer for common interchange formats.",
-    .version = "0.2.1",
+    .version = "0.2.2",
     .platforms = .{ "windows" },
     .permissions = .{},
     .capabilities = .{ "webview", "js_bridge" },
@@ -11,6 +11,8 @@
         .commands = .{
             .{ .name = "app.registerFileAssociations", .origins = .{ "zero://app", "http://127.0.0.1:5173" } },
             .{ .name = "app.openDefaultApps", .origins = .{ "zero://app", "http://127.0.0.1:5173" } },
+            .{ .name = "app.getLaunchManifest", .origins = .{ "zero://app", "http://127.0.0.1:5173" } },
+            .{ .name = "app.readLaunchFileChunk", .origins = .{ "zero://app", "http://127.0.0.1:5173" } },
             .{ .name = "app.consumeLaunchRequest", .origins = .{ "zero://app", "http://127.0.0.1:5173" } },
         },
     },
