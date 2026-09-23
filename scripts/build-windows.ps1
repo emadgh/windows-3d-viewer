@@ -36,12 +36,19 @@ try {
   $singleExe = Join-Path $outputDir 'windows-3d-viewer.exe'
   Copy-Item -LiteralPath $builtExe -Destination $singleExe -Force
 
+  $exeBytes = [IO.File]::ReadAllBytes($singleExe)
+  $peOffset = [BitConverter]::ToInt32($exeBytes, 0x3c)
+  $subsystem = [BitConverter]::ToUInt16($exeBytes, $peOffset + 24 + 68)
+  if ($subsystem -ne 2) {
+    throw "Expected a Windows GUI executable (PE subsystem 2), got subsystem $subsystem."
+  }
+
   $files = @(Get-ChildItem -LiteralPath $outputDir -File)
   if ($files.Count -ne 1 -or $files[0].Name -ne 'windows-3d-viewer.exe') {
     throw 'dist must contain exactly one distributable file: windows-3d-viewer.exe'
   }
 
-  Write-Host "Single-file Rust Windows executable: $singleExe"
+  Write-Host "Single-file Rust Windows GUI executable: $singleExe"
   Write-Host "Size: $((Get-Item $singleExe).Length) bytes"
 }
 finally {
