@@ -1,8 +1,10 @@
-# Windows 3D Viewer
+# 3D Viewer
 
 A lightweight Windows desktop 3D file viewer with a Rust native host and an embedded Vite/Three.js frontend.
 
-The distributable is a single `windows-3d-viewer.exe`. The production frontend, Draco decoder, Basis/KTX2 decoder and WebView host code are compiled into the executable; there is no application `resources` directory and no separate `WebView2Loader.dll` to ship.
+![3D Viewer showing a loaded 3D scene](assets/3d-viewer-screenshot.jpg)
+
+The distributable is a single `3D Viewer.exe`. The production frontend, Draco decoder, Basis/KTX2 decoder and WebView host code are compiled into the executable; there is no application `resources` directory and no separate `WebView2Loader.dll` to ship.
 
 ## Features
 
@@ -59,19 +61,19 @@ The development script builds the frontend and starts the Rust host with `cargo 
 The only distributable written to `dist/` is:
 
 ```text
-dist/windows-3d-viewer.exe
+dist/3D Viewer.exe
 ```
 
 The release target is `x86_64-pc-windows-msvc`. Wry/WebView2 uses the MSVC static WebView2 loader, so `WebView2Loader.dll` does not need to sit beside the executable.
 
 ## Opening models from Explorer
 
-The Settings dialog can register Windows 3D Viewer for the supported file formats. Windows still requires the user to confirm the final default-app selection in Default Apps.
+The Settings dialog can register 3D Viewer for the supported file formats. Windows still requires the user to confirm the final default-app selection in Default Apps. The same dialog links to the [GitHub repository](https://github.com/emadgh/windows-3d-viewer).
 
 The registered shell command launches the EXE directly with the selected file path:
 
 ```text
-"windows-3d-viewer.exe" "%1"
+"3D Viewer.exe" "%1"
 ```
 
 No PowerShell launcher or temporary launch manifest is required. Rust reads the selected model directly and exposes the model plus related sidecar files to the existing frontend through the native bridge.

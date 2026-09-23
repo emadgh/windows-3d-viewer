@@ -30,11 +30,12 @@ use update_via_github::{UpdateConfig, UpdateManager, UpdateStatus};
 #[cfg(windows)]
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
-const APP_NAME: &str = "Windows 3D Viewer";
-const APP_EXE_NAME: &str = "windows-3d-viewer.exe";
+const APP_NAME: &str = "3D Viewer";
+const APP_EXE_NAME: &str = "3D Viewer.exe";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const UPDATE_REPOSITORY: &str = "emadgh/windows-3d-viewer";
-const UPDATE_CHECKSUM_ASSET: &str = "windows-3d-viewer.exe.sha256";
+const UPDATE_CHECKSUM_ASSET: &str = "3D Viewer.exe.sha256";
+const REPOSITORY_URL: &str = "https://github.com/emadgh/windows-3d-viewer";
 const FILE_CHUNK_BYTES: usize = 256 * 1024;
 
 #[cfg(windows)]
@@ -557,12 +558,12 @@ fn forward_to_primary_instance() -> Result<(), String> {
             if signaled {
                 return Ok(());
             }
-            return Err("Could not notify the running Windows 3D Viewer instance.".to_string());
+            return Err("Could not notify the running 3D Viewer instance.".to_string());
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 
-    Err("The running Windows 3D Viewer instance could not be reached.".to_string())
+    Err("The running 3D Viewer instance could not be reached.".to_string())
 }
 
 #[cfg(windows)]
@@ -688,6 +689,7 @@ fn register_file_associations() -> Result<(), String> {
     let (registered_apps, _) = hkcu
         .create_subkey(r"Software\RegisteredApplications")
         .map_err(|error| error.to_string())?;
+    let _ = registered_apps.delete_value("Windows 3D Viewer");
     registered_apps
         .set_value(APP_NAME, &capability_relative)
         .map_err(|error| error.to_string())?;
@@ -722,7 +724,7 @@ fn register_file_associations() -> Result<(), String> {
         let (prog_key, _) = hkcu
             .create_subkey(&prog_path)
             .map_err(|error| error.to_string())?;
-        let description = format!("Windows 3D Viewer {label} File");
+        let description = format!("3D Viewer {label} File");
         prog_key
             .set_value("", &description)
             .map_err(|error| error.to_string())?;
@@ -770,6 +772,16 @@ fn register_file_associations() -> Result<(), String> {
 
 #[cfg(windows)]
 fn open_default_apps() -> Result<(), String> {
+    shell_open_uri("ms-settings:defaultapps?registeredAppUser=3D%20Viewer")
+}
+
+#[cfg(windows)]
+fn open_repository() -> Result<(), String> {
+    shell_open_uri(REPOSITORY_URL)
+}
+
+#[cfg(windows)]
+fn shell_open_uri(uri: &str) -> Result<(), String> {
     use std::{ffi::OsStr, iter::once, os::windows::ffi::OsStrExt, ptr};
 
     fn wide(value: &str) -> Vec<u16> {
@@ -777,12 +789,12 @@ fn open_default_apps() -> Result<(), String> {
     }
 
     let operation = wide("open");
-    let uri = wide("ms-settings:defaultapps?registeredAppUser=Windows%203D%20Viewer");
+    let uri_wide = wide(uri);
     let result = unsafe {
         ShellExecuteW(
             ptr::null_mut(),
             operation.as_ptr(),
-            uri.as_ptr(),
+            uri_wide.as_ptr(),
             ptr::null(),
             ptr::null(),
             SW_SHOWNORMAL,
@@ -792,15 +804,18 @@ fn open_default_apps() -> Result<(), String> {
     if result as usize > 32 {
         Ok(())
     } else {
-        Err(format!(
-            "Could not open Windows Default Apps (ShellExecuteW returned {result})."
-        ))
+        Err(format!("Could not open {uri} (ShellExecuteW returned {result})."))
     }
 }
 
 #[cfg(not(windows))]
 fn open_default_apps() -> Result<(), String> {
     Err("Windows Default Apps are available only on Windows.".to_string())
+}
+
+#[cfg(not(windows))]
+fn open_repository() -> Result<(), String> {
+    Err("Opening the GitHub repository is supported only on Windows.".to_string())
 }
 
 #[cfg(windows)]
@@ -966,6 +981,10 @@ fn dispatch_bridge(
             open_default_apps()?;
             Ok(json!({ "opened": true }))
         }
+        "app.openRepository" => {
+            open_repository()?;
+            Ok(json!({ "opened": true }))
+        }
         "app.getInstanceMode" => Ok(json!({
             "singleInstance": single_instance_enabled(),
         })),
@@ -1048,11 +1067,18 @@ fn run_app() -> Result<(), Box<dyn Error>> {
         None => return Ok(()),
     };
 
-    let window = WindowBuilder::new()
-        .with_title(APP_NAME)
+    let window_builder = WindowBuilder::new()
+        .with_title(format!("{APP_NAME} v{APP_VERSION}"))
         .with_inner_size(LogicalSize::new(1400.0, 900.0))
-        .with_min_inner_size(LogicalSize::new(800.0, 560.0))
-        .build(&event_loop)?;
+        .with_min_inner_size(LogicalSize::new(800.0, 560.0));
+
+    #[cfg(windows)]
+    let window_builder = {
+        use tao::{platform::windows::IconExtWindows, window::Icon};
+        window_builder.with_window_icon(Some(Icon::from_resource(1, None)?))
+    };
+
+    let window = window_builder.build(&event_loop)?;
 
     let ipc_proxy = proxy.clone();
     let builder = WebViewBuilder::new()
@@ -1126,7 +1152,7 @@ fn run_app() -> Result<(), Box<dyn Error>> {
 
 fn main() {
     if let Err(error) = run_app() {
-        let message = format!("Windows 3D Viewer failed to start:\n{error:#}");
+        let message = format!("3D Viewer failed to start:\n{error:#}");
         write_fatal_log(&message);
         #[cfg(debug_assertions)]
         eprintln!("{message}");

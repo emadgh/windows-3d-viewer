@@ -4,18 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' blob: data:; worker-src 'self' blob:; font-src 'self' data:;" />
-  <title>Windows 3D Viewer</title>
+  <title>3D Viewer</title>
 </head>
 <body>
   <div id="app">
     <header class="toolbar">
-      <div class="brand" aria-label="Windows 3D Viewer">
+      <div class="brand" aria-label="3D Viewer">
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M12 2.9 20 7.5v9L12 21.1 4 16.5v-9L12 2.9Zm0 2.3L6.1 8.6v6.8l5.9 3.4 5.9-3.4V8.6L12 5.2Zm0 2.2 4 2.3v4.6l-4 2.3-4-2.3V9.7l4-2.3Z"/></svg>
         </span>
         <span class="brand-copy">
           <strong>3D Viewer</strong>
-          <span>Windows</span>
         </span>
       </div>
 
@@ -162,7 +161,7 @@
       <div class="settings-section">
         <div class="settings-copy">
           <h3>Default 3D viewer</h3>
-          <p>Register Windows 3D Viewer for all supported model formats, then choose it as the default app in Windows Settings.</p>
+          <p>Register 3D Viewer for all supported model formats, then choose it as the default app in Windows Settings.</p>
           <div class="format-chips" aria-label="Supported file associations">
             <span>GLB</span><span>GLTF</span><span>FBX</span><span>OBJ</span><span>STL</span><span>PLY</span>
             <span>DAE</span><span>3MF</span><span>3DS</span><span>USDZ</span><span>WRL</span><span>VRML</span>
@@ -191,6 +190,18 @@
             </label>
           </div>
           <div id="instanceModeStatus" class="association-status" role="status" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-copy">
+          <h3>GitHub</h3>
+          <p>Source code, releases, and support for 3D Viewer.</p>
+          <p><a id="githubRepositoryLink" href="https://github.com/emadgh/windows-3d-viewer">github.com/emadgh/windows-3d-viewer</a></p>
+          <div class="settings-actions">
+            <button id="openRepositoryButton">Open GitHub repository</button>
+          </div>
+          <div id="repositoryStatus" class="association-status" role="status" aria-live="polite"></div>
         </div>
       </div>
     </section>

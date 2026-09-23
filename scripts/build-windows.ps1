@@ -11,8 +11,21 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
   throw 'Node.js/npm is not installed.'
 }
 
-if (Test-Path $outputDir) { Remove-Item $outputDir -Recurse -Force }
-New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+if (-not (Test-Path -LiteralPath $outputDir -PathType Container)) {
+  New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+} else {
+  foreach ($name in @(
+    'windows-3d-viewer.exe',
+    'windows-3d-viewer.exe.sha256',
+    '3D Viewer.exe',
+    '3D Viewer.exe.sha256'
+  )) {
+    $oldBuildFile = Join-Path $outputDir $name
+    if (Test-Path -LiteralPath $oldBuildFile -PathType Leaf) {
+      Remove-Item -LiteralPath $oldBuildFile -Force
+    }
+  }
+}
 
 Push-Location $repo
 try {
@@ -28,12 +41,12 @@ try {
   cargo build --release --target $target
   if ($LASTEXITCODE -ne 0) { throw 'Rust release build failed.' }
 
-  $builtExe = Join-Path $repo "target/$target/release/windows-3d-viewer.exe"
+  $builtExe = Join-Path $repo "target/$target/release/viewer-3d.exe"
   if (-not (Test-Path -LiteralPath $builtExe)) {
     throw "Expected Rust executable was not created: $builtExe"
   }
 
-  $singleExe = Join-Path $outputDir 'windows-3d-viewer.exe'
+  $singleExe = Join-Path $outputDir '3D Viewer.exe'
   Copy-Item -LiteralPath $builtExe -Destination $singleExe -Force
 
   $exeBytes = [IO.File]::ReadAllBytes($singleExe)
@@ -44,8 +57,8 @@ try {
   }
 
   $files = @(Get-ChildItem -LiteralPath $outputDir -File)
-  if ($files.Count -ne 1 -or $files[0].Name -ne 'windows-3d-viewer.exe') {
-    throw 'dist must contain exactly one distributable file: windows-3d-viewer.exe'
+  if ($files.Count -ne 1 -or $files[0].Name -ne '3D Viewer.exe') {
+    throw 'dist must contain exactly one distributable file: 3D Viewer.exe'
   }
 
   Write-Host "Single-file Rust Windows GUI executable: $singleExe"

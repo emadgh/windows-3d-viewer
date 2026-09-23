@@ -9,6 +9,9 @@ const status = document.querySelector('#associationStatus');
 const singleInstanceRadio = document.querySelector('#singleInstanceRadio');
 const multipleInstancesRadio = document.querySelector('#multipleInstancesRadio');
 const instanceModeStatus = document.querySelector('#instanceModeStatus');
+const githubRepositoryLink = document.querySelector('#githubRepositoryLink');
+const openRepositoryButton = document.querySelector('#openRepositoryButton');
+const repositoryStatus = document.querySelector('#repositoryStatus');
 
 const updaterSection = document.createElement('div');
 updaterSection.className = 'settings-section updater-section';
@@ -270,7 +273,7 @@ updateActionButton.addEventListener('click', async () => {
 
     if (lastUpdateState?.state === 'ready') {
       updateStatusTitle.textContent = 'Installing update…';
-      updateStatusDetail.textContent = 'Windows 3D Viewer will restart automatically.';
+      updateStatusDetail.textContent = '3D Viewer will restart automatically.';
       checkUpdateButton.disabled = true;
       updateActionButton.disabled = true;
       await invokeNative('app.applyUpdate');
@@ -311,3 +314,23 @@ openDefaultAppsButton.addEventListener('click', async () => {
     openDefaultAppsButton.disabled = false;
   }
 });
+
+async function openRepository(event) {
+  event?.preventDefault();
+  openRepositoryButton.disabled = true;
+  repositoryStatus.textContent = 'Opening GitHub repository…';
+  repositoryStatus.classList.remove('error');
+
+  try {
+    await invokeNative('app.openRepository');
+    repositoryStatus.textContent = 'GitHub repository opened in your browser.';
+  } catch (error) {
+    repositoryStatus.textContent = error?.message || 'Could not open the GitHub repository.';
+    repositoryStatus.classList.add('error');
+  } finally {
+    openRepositoryButton.disabled = false;
+  }
+}
+
+githubRepositoryLink.addEventListener('click', openRepository);
+openRepositoryButton.addEventListener('click', openRepository);
