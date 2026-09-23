@@ -31,10 +31,10 @@ use update_via_github::{UpdateConfig, UpdateManager, UpdateStatus};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
 const APP_NAME: &str = "3D Viewer";
-const APP_EXE_NAME: &str = "3D Viewer.exe";
+const APP_EXE_NAME: &str = "3D-Viewer.exe";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const UPDATE_REPOSITORY: &str = "emadgh/windows-3d-viewer";
-const UPDATE_CHECKSUM_ASSET: &str = "3D Viewer.exe.sha256";
+const UPDATE_CHECKSUM_ASSET: &str = "3D-Viewer.exe.sha256";
 const REPOSITORY_URL: &str = "https://github.com/emadgh/windows-3d-viewer";
 const FILE_CHUNK_BYTES: usize = 256 * 1024;
 

@@ -18,7 +18,9 @@ if (-not (Test-Path -LiteralPath $outputDir -PathType Container)) {
     'windows-3d-viewer.exe',
     'windows-3d-viewer.exe.sha256',
     '3D Viewer.exe',
-    '3D Viewer.exe.sha256'
+    '3D Viewer.exe.sha256',
+    '3D-Viewer.exe',
+    '3D-Viewer.exe.sha256'
   )) {
     $oldBuildFile = Join-Path $outputDir $name
     if (Test-Path -LiteralPath $oldBuildFile -PathType Leaf) {
@@ -46,7 +48,7 @@ try {
     throw "Expected Rust executable was not created: $builtExe"
   }
 
-  $singleExe = Join-Path $outputDir '3D Viewer.exe'
+  $singleExe = Join-Path $outputDir '3D-Viewer.exe'
   Copy-Item -LiteralPath $builtExe -Destination $singleExe -Force
 
   $exeBytes = [IO.File]::ReadAllBytes($singleExe)
@@ -57,8 +59,8 @@ try {
   }
 
   $files = @(Get-ChildItem -LiteralPath $outputDir -File)
-  if ($files.Count -ne 1 -or $files[0].Name -ne '3D Viewer.exe') {
-    throw 'dist must contain exactly one distributable file: 3D Viewer.exe'
+  if ($files.Count -ne 1 -or $files[0].Name -ne '3D-Viewer.exe') {
+    throw 'dist must contain exactly one distributable file: 3D-Viewer.exe'
   }
 
   Write-Host "Single-file Rust Windows GUI executable: $singleExe"
