@@ -21,6 +21,7 @@ import { TGALoader } from 'three/addons/loaders/TGALoader.js';
 import { DDSLoader } from 'three/addons/loaders/DDSLoader.js';
 
 const MODEL_EXTENSIONS = new Set(['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply', 'dae', '3mf', '3ds', 'usdz', 'wrl', 'vrml']);
+const DEFAULT_CLAY_COLOR = '#787878';
 const modeLabels = {
   'textured-lighting': 'Textured + Lighting',
   textured: 'Textured',
@@ -37,6 +38,8 @@ const ui = {
   resetButton: document.querySelector('#resetButton'),
   screenshotButton: document.querySelector('#screenshotButton'),
   modeSelect: document.querySelector('#modeSelect'),
+  clayColorControl: document.querySelector('#clayColorControl'),
+  clayColor: document.querySelector('#clayColor'),
   lightingToggle: document.querySelector('#lightingToggle'),
   shadowsToggle: document.querySelector('#shadowsToggle'),
   wireToggle: document.querySelector('#wireToggle'),
@@ -138,6 +141,7 @@ let activeAction = null;
 let animationPlaying = false;
 let currentFileName = '';
 let currentMode = 'textured-lighting';
+let clayColor = DEFAULT_CLAY_COLOR;
 let lightingEnabled = true;
 let shadowsEnabled = true;
 let wireOverlayEnabled = false;
@@ -545,7 +549,7 @@ function makeMaterialVariant(source, mode) {
 
   if (mode === 'clay') {
     return new THREE.MeshStandardMaterial({
-      color: 0xb8bec6,
+      color: clayColor,
       roughness: 0.78,
       metalness: 0.02,
       side: source?.side ?? THREE.FrontSide,
@@ -574,6 +578,7 @@ function materialForMode(mesh, mode) {
 function applyRenderMode(mode) {
   currentMode = mode;
   ui.modeSelect.value = mode;
+  ui.clayColorControl.hidden = mode !== 'clay';
   if (!currentModel) return;
   currentModel.traverse((child) => {
     if (!child.isMesh || child.userData.viewerHelper) return;
@@ -581,6 +586,16 @@ function applyRenderMode(mode) {
   });
   updateWireOverlays();
   ui.viewportBadge.textContent = modeLabels[mode] || mode;
+}
+
+function applyClayColor(value) {
+  clayColor = value;
+  currentModel?.traverse((child) => {
+    if (!child.isMesh || child.userData.viewerHelper) return;
+    const clayVariant = child.userData.viewerMaterialVariants?.clay;
+    if (!clayVariant) return;
+    toArray(clayVariant).forEach((material) => material.color?.set(clayColor));
+  });
 }
 
 function applyLighting() {
@@ -814,6 +829,7 @@ ui.fitButton.addEventListener('click', () => currentModel && fitObject(isolation
 ui.resetButton.addEventListener('click', resetCamera);
 ui.screenshotButton.addEventListener('click', takeScreenshot);
 ui.modeSelect.addEventListener('change', () => applyRenderMode(ui.modeSelect.value));
+ui.clayColor.addEventListener('input', () => applyClayColor(ui.clayColor.value));
 ui.lightingToggle.addEventListener('change', () => {
   lightingEnabled = ui.lightingToggle.checked;
   applyLighting();
