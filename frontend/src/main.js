@@ -2,6 +2,7 @@ import './style.css';
 import './startup-file.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
@@ -52,6 +53,20 @@ const ui = {
   dimensionY: document.querySelector('#dimensionY'),
   dimensionZ: document.querySelector('#dimensionZ'),
   boundsScale: document.querySelector('#boundsScale'),
+  transformPanel: document.querySelector('#transformPanel'),
+  transformEnabled: document.querySelector('#transformEnabled'),
+  transformModeButtons: Array.from(document.querySelectorAll('[data-transform-mode]')),
+  transformSpace: document.querySelector('#transformSpace'),
+  transformPositionX: document.querySelector('#transformPositionX'),
+  transformPositionY: document.querySelector('#transformPositionY'),
+  transformPositionZ: document.querySelector('#transformPositionZ'),
+  transformRotationX: document.querySelector('#transformRotationX'),
+  transformRotationY: document.querySelector('#transformRotationY'),
+  transformRotationZ: document.querySelector('#transformRotationZ'),
+  transformScaleX: document.querySelector('#transformScaleX'),
+  transformScaleY: document.querySelector('#transformScaleY'),
+  transformScaleZ: document.querySelector('#transformScaleZ'),
+  resetTransformButton: document.querySelector('#resetTransformButton'),
   emptyState: document.querySelector('#emptyState'),
   viewportBadge: document.querySelector('#viewportBadge'),
   modelName: document.querySelector('#modelName'),
@@ -94,6 +109,23 @@ controls.panSpeed = 0.72;
 controls.screenSpacePanning = true;
 controls.target.set(0, 0, 0);
 controls.update();
+
+const transformControls = new TransformControls(camera, renderer.domElement);
+const transformHelper = transformControls.getHelper();
+transformHelper.visible = false;
+transformHelper.userData.viewerHelper = true;
+scene.add(transformHelper);
+
+transformControls.addEventListener('mouseDown', () => {
+  controls.enabled = false;
+});
+transformControls.addEventListener('mouseUp', () => {
+  controls.enabled = true;
+});
+transformControls.addEventListener('objectChange', () => {
+  updateTransformFields();
+  updateBoundsMeasurement();
+});
 
 const pmrem = new THREE.PMREMGenerator(renderer);
 const room = new RoomEnvironment();
@@ -169,6 +201,8 @@ let visibilitySnapshot = null;
 let treeRows = [];
 let lastModelBounds = null;
 let boundsVisible = false;
+let glbTransformEnabled = false;
+let originalGlbTransform = null;
 const clock = new THREE.Clock();
 
 manager.setURLModifier((url) => resolveLocalAsset(url));
@@ -368,6 +402,7 @@ function installModel(object, animations, fileName) {
   });
 
   configureAnimations();
+  configureGlbTransformTools();
   updateModelStats();
   updateStageFromModel();
   updateBoundsMeasurement();
@@ -395,6 +430,9 @@ function addWireOverlay(mesh) {
 }
 
 function clearCurrentModel() {
+  setGlbTransformEnabled(false);
+  ui.transformPanel.hidden = true;
+  originalGlbTransform = null;
   clearIsolation();
   if (mixer) {
     mixer.stopAllAction();
@@ -478,6 +516,137 @@ function updateModelStats() {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString('en-US');
+}
+
+function isGlbModel() {
+  return Boolean(currentModel) && getExtension(currentFileName) === 'glb';
+}
+
+function configureGlbTransformTools() {
+  const available = isGlbModel();
+  ui.transformPanel.hidden = !available;
+
+  if (!available) {
+    setGlbTransformEnabled(false);
+    originalGlbTransform = null;
+    return;
+  }
+
+  originalGlbTransform = {
+    position: currentModel.position.clone(),
+    quaternion: currentModel.quaternion.clone(),
+    scale: currentModel.scale.clone(),
+  };
+
+  ui.transformEnabled.checked = false;
+  ui.transformSpace.value = 'local';
+  transformControls.setMode('translate');
+  transformControls.setSpace('local');
+  setTransformModeButtonState('translate');
+  setGlbTransformEnabled(false);
+  updateTransformFields();
+}
+
+function setGlbTransformEnabled(enabled) {
+  glbTransformEnabled = Boolean(enabled && isGlbModel());
+  ui.transformEnabled.checked = glbTransformEnabled;
+
+  if (glbTransformEnabled) {
+    transformControls.attach(currentModel);
+    transformHelper.visible = true;
+  } else {
+    transformControls.detach();
+    transformHelper.visible = false;
+    controls.enabled = true;
+  }
+
+  ui.transformModeButtons.forEach((button) => { button.disabled = !glbTransformEnabled; });
+  ui.transformSpace.disabled = !glbTransformEnabled;
+  [
+    ui.transformPositionX, ui.transformPositionY, ui.transformPositionZ,
+    ui.transformRotationX, ui.transformRotationY, ui.transformRotationZ,
+    ui.transformScaleX, ui.transformScaleY, ui.transformScaleZ,
+    ui.resetTransformButton,
+  ].forEach((control) => { control.disabled = !glbTransformEnabled; });
+}
+
+function setTransformModeButtonState(mode) {
+  for (const button of ui.transformModeButtons) {
+    const active = button.dataset.transformMode === mode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+}
+
+function setTransformMode(mode) {
+  if (!glbTransformEnabled || !['translate', 'rotate', 'scale'].includes(mode)) return;
+  transformControls.setMode(mode);
+  setTransformModeButtonState(mode);
+}
+
+function cleanTransformNumber(value) {
+  return Math.abs(value) < 0.0000005 ? 0 : value;
+}
+
+function formatTransformNumber(value, digits = 4) {
+  const clean = cleanTransformNumber(Number(value) || 0);
+  return clean.toFixed(digits).replace(/\.?0+$/, '');
+}
+
+function updateTransformFields() {
+  if (!isGlbModel()) return;
+  ui.transformPositionX.value = formatTransformNumber(currentModel.position.x);
+  ui.transformPositionY.value = formatTransformNumber(currentModel.position.y);
+  ui.transformPositionZ.value = formatTransformNumber(currentModel.position.z);
+  ui.transformRotationX.value = formatTransformNumber(THREE.MathUtils.radToDeg(currentModel.rotation.x), 2);
+  ui.transformRotationY.value = formatTransformNumber(THREE.MathUtils.radToDeg(currentModel.rotation.y), 2);
+  ui.transformRotationZ.value = formatTransformNumber(THREE.MathUtils.radToDeg(currentModel.rotation.z), 2);
+  ui.transformScaleX.value = formatTransformNumber(currentModel.scale.x);
+  ui.transformScaleY.value = formatTransformNumber(currentModel.scale.y);
+  ui.transformScaleZ.value = formatTransformNumber(currentModel.scale.z);
+}
+
+function readFiniteInput(input, fallback) {
+  const value = Number(input.value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function applyTransformFields() {
+  if (!glbTransformEnabled || !isGlbModel()) return;
+
+  currentModel.position.set(
+    readFiniteInput(ui.transformPositionX, currentModel.position.x),
+    readFiniteInput(ui.transformPositionY, currentModel.position.y),
+    readFiniteInput(ui.transformPositionZ, currentModel.position.z),
+  );
+
+  currentModel.rotation.set(
+    THREE.MathUtils.degToRad(readFiniteInput(ui.transformRotationX, THREE.MathUtils.radToDeg(currentModel.rotation.x))),
+    THREE.MathUtils.degToRad(readFiniteInput(ui.transformRotationY, THREE.MathUtils.radToDeg(currentModel.rotation.y))),
+    THREE.MathUtils.degToRad(readFiniteInput(ui.transformRotationZ, THREE.MathUtils.radToDeg(currentModel.rotation.z))),
+    currentModel.rotation.order,
+  );
+
+  const minScale = 0.000001;
+  currentModel.scale.set(
+    Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleX, currentModel.scale.x))),
+    Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleY, currentModel.scale.y))),
+    Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleZ, currentModel.scale.z))),
+  );
+
+  currentModel.updateMatrixWorld(true);
+  updateTransformFields();
+  updateBoundsMeasurement();
+}
+
+function resetGlbTransform() {
+  if (!isGlbModel() || !originalGlbTransform) return;
+  currentModel.position.copy(originalGlbTransform.position);
+  currentModel.quaternion.copy(originalGlbTransform.quaternion);
+  currentModel.scale.copy(originalGlbTransform.scale);
+  currentModel.updateMatrixWorld(true);
+  updateTransformFields();
+  updateBoundsMeasurement();
 }
 
 function getUnityMetersPerUnit() {
@@ -950,6 +1119,22 @@ ui.boundsToggleButton.addEventListener('click', () => {
   ui.boundsToggleButton.setAttribute('aria-pressed', String(boundsVisible));
   updateBoundsMeasurement();
 });
+ui.transformEnabled.addEventListener('change', () => setGlbTransformEnabled(ui.transformEnabled.checked));
+ui.transformModeButtons.forEach((button) => {
+  button.addEventListener('click', () => setTransformMode(button.dataset.transformMode));
+});
+ui.transformSpace.addEventListener('change', () => {
+  if (!glbTransformEnabled) return;
+  transformControls.setSpace(ui.transformSpace.value === 'world' ? 'world' : 'local');
+});
+[
+  ui.transformPositionX, ui.transformPositionY, ui.transformPositionZ,
+  ui.transformRotationX, ui.transformRotationY, ui.transformRotationZ,
+  ui.transformScaleX, ui.transformScaleY, ui.transformScaleZ,
+].forEach((input) => {
+  input.addEventListener('change', applyTransformFields);
+});
+ui.resetTransformButton.addEventListener('click', resetGlbTransform);
 ui.autorotateToggle.addEventListener('change', () => {
   controls.autoRotate = ui.autorotateToggle.checked;
   controls.autoRotateSpeed = 1.2;
@@ -966,6 +1151,15 @@ ui.restartAnimationButton.addEventListener('click', () => {
 ui.treeSearch.addEventListener('input', () => filterTree(ui.treeSearch.value));
 ui.clearIsolationButton.addEventListener('click', () => clearIsolation());
 renderer.domElement.addEventListener('dblclick', handleDoubleClick);
+
+window.addEventListener('keydown', (event) => {
+  if (!glbTransformEnabled || event.ctrlKey || event.metaKey || event.altKey) return;
+  const tag = document.activeElement?.tagName?.toLowerCase();
+  if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+  if (event.key.toLowerCase() === 'w') setTransformMode('translate');
+  else if (event.key.toLowerCase() === 'e') setTransformMode('rotate');
+  else if (event.key.toLowerCase() === 'r') setTransformMode('scale');
+});
 
 let dragDepth = 0;
 window.addEventListener('dragenter', (event) => {
