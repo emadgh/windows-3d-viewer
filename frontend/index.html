@@ -112,6 +112,20 @@
             </div>
           </section>
 
+          <section class="panel dimensions-panel">
+            <div class="panel-title row">
+              <span>Bounds · Unity</span>
+              <button id="boundsToggleButton" class="ghost small bounds-toggle-button" type="button" aria-pressed="false">Show box</button>
+            </div>
+            <div id="boundsTarget" class="bounds-target">No model</div>
+            <div class="dimensions-grid">
+              <div class="dimension-stat"><span>X · Width</span><strong id="dimensionX">—</strong></div>
+              <div class="dimension-stat"><span>Y · Height</span><strong id="dimensionY">—</strong></div>
+              <div class="dimension-stat"><span>Z · Depth</span><strong id="dimensionZ">—</strong></div>
+            </div>
+            <div id="boundsScale" class="bounds-scale">1 Unity unit = 1 m</div>
+          </section>
+
           <section id="animationPanel" class="panel" hidden>
             <div class="panel-title"><span>Animation</span><span class="panel-accent"></span></div>
             <select id="animationSelect"></select>
