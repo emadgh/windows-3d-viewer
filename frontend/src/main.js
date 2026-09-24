@@ -46,6 +46,12 @@ const ui = {
   gridToggle: document.querySelector('#gridToggle'),
   axesToggle: document.querySelector('#axesToggle'),
   autorotateToggle: document.querySelector('#autorotateToggle'),
+  boundsToggleButton: document.querySelector('#boundsToggleButton'),
+  boundsTarget: document.querySelector('#boundsTarget'),
+  dimensionX: document.querySelector('#dimensionX'),
+  dimensionY: document.querySelector('#dimensionY'),
+  dimensionZ: document.querySelector('#dimensionZ'),
+  boundsScale: document.querySelector('#boundsScale'),
   emptyState: document.querySelector('#emptyState'),
   viewportBadge: document.querySelector('#viewportBadge'),
   modelName: document.querySelector('#modelName'),
@@ -121,6 +127,17 @@ const axes = new THREE.AxesHelper(1);
 axes.visible = false;
 scene.add(axes);
 
+const boundsBox = new THREE.Box3();
+const boundsHelper = new THREE.Box3Helper(boundsBox, 0x79a3ff);
+boundsHelper.visible = false;
+boundsHelper.renderOrder = 100;
+boundsHelper.userData.viewerHelper = true;
+boundsHelper.material.transparent = true;
+boundsHelper.material.opacity = 0.95;
+boundsHelper.material.depthTest = false;
+boundsHelper.material.depthWrite = false;
+scene.add(boundsHelper);
+
 const groundMaterial = new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.24, transparent: true });
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), groundMaterial);
 ground.rotation.x = -Math.PI / 2;
@@ -151,6 +168,7 @@ let isolationTarget = null;
 let visibilitySnapshot = null;
 let treeRows = [];
 let lastModelBounds = null;
+let boundsVisible = false;
 const clock = new THREE.Clock();
 
 manager.setURLModifier((url) => resolveLocalAsset(url));
@@ -352,6 +370,7 @@ function installModel(object, animations, fileName) {
   configureAnimations();
   updateModelStats();
   updateStageFromModel();
+  updateBoundsMeasurement();
   applyRenderMode(currentMode);
   applyLighting();
   applyShadows();
@@ -392,6 +411,13 @@ function clearCurrentModel() {
   }
   currentModel = null;
   lastModelBounds = null;
+  boundsBox.makeEmpty();
+  boundsHelper.visible = false;
+  ui.boundsTarget.textContent = 'No model';
+  ui.dimensionX.textContent = '—';
+  ui.dimensionY.textContent = '—';
+  ui.dimensionZ.textContent = '—';
+  ui.boundsScale.textContent = '1 Unity unit = 1 m';
   ui.animationPanel.hidden = true;
   ui.objectTree.innerHTML = '<div class="tree-empty">Open a model to inspect its objects.</div>';
   ui.meshCount.textContent = '—';
@@ -452,6 +478,78 @@ function updateModelStats() {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString('en-US');
+}
+
+function getUnityMetersPerUnit() {
+  const extension = getExtension(currentFileName);
+
+  // Unity world scale is meter-based. FBX stores UnitScaleFactor as
+  // centimeters per file unit (1 = cm, 100 = m), so divide by 100.
+  if (extension === 'fbx') {
+    const fbxUnitScale = Number(currentModel?.userData?.unitScaleFactor);
+    if (Number.isFinite(fbxUnitScale) && fbxUnitScale > 0) return fbxUnitScale / 100;
+    return 0.01;
+  }
+
+  // Match Unity's conventional import scale for legacy 3DS assets.
+  if (extension === '3ds') return 0.1;
+
+  // glTF/GLB are meter-based. Unitless formats are treated as one meter per
+  // file unit, which matches Unity's world-unit convention.
+  return 1;
+}
+
+function formatMeters(value) {
+  if (!Number.isFinite(value)) return '—';
+  const magnitude = Math.abs(value);
+  const maximumFractionDigits = magnitude >= 100 ? 2 : magnitude >= 1 ? 3 : magnitude >= 0.01 ? 4 : 6;
+  return `${value.toLocaleString('en-US', { maximumFractionDigits })} m`;
+}
+
+function updateBoundsMeasurement() {
+  const target = isolationTarget || currentModel;
+  if (!target) {
+    boundsBox.makeEmpty();
+    boundsHelper.visible = false;
+    return;
+  }
+
+  target.updateWorldMatrix(true, true);
+  const box = new THREE.Box3().setFromObject(target, true);
+  if (box.isEmpty()) {
+    boundsBox.makeEmpty();
+    boundsHelper.visible = false;
+    ui.boundsTarget.textContent = 'Empty';
+    ui.dimensionX.textContent = '—';
+    ui.dimensionY.textContent = '—';
+    ui.dimensionZ.textContent = '—';
+    return;
+  }
+
+  const size = box.getSize(new THREE.Vector3());
+  const metersPerUnit = getUnityMetersPerUnit();
+
+  ui.boundsTarget.textContent = isolationTarget
+    ? (isolationTarget.name || isolationTarget.type || 'Isolated object')
+    : 'Whole model';
+  ui.dimensionX.textContent = formatMeters(size.x * metersPerUnit);
+  ui.dimensionY.textContent = formatMeters(size.y * metersPerUnit);
+  ui.dimensionZ.textContent = formatMeters(size.z * metersPerUnit);
+
+  const extension = getExtension(currentFileName);
+  if (extension === 'fbx') {
+    const fbxUnitScale = Number(currentModel?.userData?.unitScaleFactor);
+    ui.boundsScale.textContent = Number.isFinite(fbxUnitScale) && fbxUnitScale > 0
+      ? `FBX → Unity: 1 file unit = ${formatMeters(metersPerUnit)}`
+      : 'FBX → Unity fallback: 1 file unit = 0.01 m';
+  } else if (extension === '3ds') {
+    ui.boundsScale.textContent = '3DS → Unity: 1 file unit = 0.1 m';
+  } else {
+    ui.boundsScale.textContent = 'Unity scale: 1 unit = 1 m';
+  }
+
+  boundsBox.copy(box);
+  boundsHelper.visible = boundsVisible;
 }
 
 function updateStageFromModel() {
@@ -757,6 +855,7 @@ function isolateObject(node) {
   isolationTarget = node;
   ui.clearIsolationButton.hidden = false;
   updateWireOverlays();
+  updateBoundsMeasurement();
   renderObjectTree();
   fitObject(node, true);
 }
@@ -769,6 +868,7 @@ function clearIsolation(rerender = true) {
   isolationTarget = null;
   ui.clearIsolationButton.hidden = true;
   updateWireOverlays();
+  if (currentModel) updateBoundsMeasurement();
   if (rerender && currentModel) renderObjectTree();
 }
 
@@ -844,6 +944,12 @@ ui.wireToggle.addEventListener('change', () => {
 });
 ui.gridToggle.addEventListener('change', () => { grid.visible = ui.gridToggle.checked; });
 ui.axesToggle.addEventListener('change', () => { axes.visible = ui.axesToggle.checked; });
+ui.boundsToggleButton.addEventListener('click', () => {
+  boundsVisible = !boundsVisible;
+  ui.boundsToggleButton.textContent = boundsVisible ? 'Hide box' : 'Show box';
+  ui.boundsToggleButton.setAttribute('aria-pressed', String(boundsVisible));
+  updateBoundsMeasurement();
+});
 ui.autorotateToggle.addEventListener('change', () => {
   controls.autoRotate = ui.autorotateToggle.checked;
   controls.autoRotateSpeed = 1.2;
