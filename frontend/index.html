@@ -126,6 +126,61 @@
             <div id="boundsScale" class="bounds-scale">1 Unity unit = 1 m</div>
           </section>
 
+          <section id="transformPanel" class="panel transform-panel" hidden>
+            <div class="panel-title row">
+              <span>Transform · GLB</span>
+              <label class="transform-enable" title="Enable GLB transform editing">
+                <input id="transformEnabled" type="checkbox" />
+                <span class="switch"></span>
+                <span>Edit</span>
+              </label>
+            </div>
+
+            <div class="transform-toolbar" role="group" aria-label="Transform mode">
+              <button type="button" data-transform-mode="translate" aria-pressed="true" disabled>Move <kbd>W</kbd></button>
+              <button type="button" data-transform-mode="rotate" aria-pressed="false" disabled>Rotate <kbd>E</kbd></button>
+              <button type="button" data-transform-mode="scale" aria-pressed="false" disabled>Scale <kbd>R</kbd></button>
+            </div>
+
+            <label class="transform-space-row">
+              <span>Space</span>
+              <select id="transformSpace" disabled>
+                <option value="local">Local</option>
+                <option value="world">World</option>
+              </select>
+            </label>
+
+            <div class="transform-field-group">
+              <div class="transform-field-label">Position <span>m</span></div>
+              <div class="transform-vector-grid">
+                <label><span>X</span><input id="transformPositionX" type="number" step="0.01" disabled /></label>
+                <label><span>Y</span><input id="transformPositionY" type="number" step="0.01" disabled /></label>
+                <label><span>Z</span><input id="transformPositionZ" type="number" step="0.01" disabled /></label>
+              </div>
+            </div>
+
+            <div class="transform-field-group">
+              <div class="transform-field-label">Rotation <span>deg</span></div>
+              <div class="transform-vector-grid">
+                <label><span>X</span><input id="transformRotationX" type="number" step="1" disabled /></label>
+                <label><span>Y</span><input id="transformRotationY" type="number" step="1" disabled /></label>
+                <label><span>Z</span><input id="transformRotationZ" type="number" step="1" disabled /></label>
+              </div>
+            </div>
+
+            <div class="transform-field-group">
+              <div class="transform-field-label">Scale</div>
+              <div class="transform-vector-grid">
+                <label><span>X</span><input id="transformScaleX" type="number" min="0.000001" step="0.01" disabled /></label>
+                <label><span>Y</span><input id="transformScaleY" type="number" min="0.000001" step="0.01" disabled /></label>
+                <label><span>Z</span><input id="transformScaleZ" type="number" min="0.000001" step="0.01" disabled /></label>
+              </div>
+            </div>
+
+            <button id="resetTransformButton" type="button" class="transform-reset" disabled>Reset transform</button>
+            <div class="transform-note">Editing is available only for GLB files. Changes are in-memory in this version.</div>
+          </section>
+
           <section id="animationPanel" class="panel" hidden>
             <div class="panel-title"><span>Animation</span><span class="panel-accent"></span></div>
             <select id="animationSelect"></select>
