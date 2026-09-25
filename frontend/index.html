@@ -190,14 +190,14 @@
             </div>
 
             <button id="precisionAlignButton" type="button" class="precision-align-launch" disabled>
-              Precision Align · X/Y guides
+              <span>Precision Align · X/Y guides</span><kbd>G</kbd>
             </button>
 
             <label class="transform-space-row">
               <span>Space <kbd>Q</kbd></span>
               <select id="transformSpace" disabled>
                 <option value="local">Local</option>
-                <option value="world">World</option>
+                <option value="world" selected>World</option>
               </select>
             </label>
 
@@ -206,7 +206,7 @@
               <select id="transformPivot" disabled>
                 <option value="center">Center pivot</option>
                 <option value="object">Object pivot</option>
-                <option value="bottom">Bottom of bounding box</option>
+                <option value="bottom" selected>Bottom of bounding box</option>
               </select>
             </label>
 
@@ -229,15 +229,19 @@
             </div>
 
             <div class="transform-field-group">
-              <div class="transform-field-label">
-                <span class="transform-field-name">Scale</span>
+              <div class="transform-field-label scale-field-header">
+                <select id="scaleInputMode" class="scale-input-mode" disabled aria-label="Scale input mode">
+                  <option value="factor">Scale factor</option>
+                  <option value="bounds">Bounding box size</option>
+                </select>
                 <label class="scale-lock-toggle" title="Lock X/Y/Z to uniform scale">
-                  <input id="unifiedScaleToggle" type="checkbox" disabled />
+                  <input id="unifiedScaleToggle" type="checkbox" checked disabled />
                   <span class="scale-lock-icon">⛓</span>
                   <span>Lock XYZ</span>
                   <kbd>U</kbd>
                 </label>
               </div>
+              <div id="scaleInputDescription" class="scale-input-description">X / Y / Z scale factor</div>
               <div class="transform-vector-grid">
                 <label><span>X</span><input id="transformScaleX" type="number" min="0.000001" step="0.01" disabled /></label>
                 <label><span>Y</span><input id="transformScaleY" type="number" min="0.000001" step="0.01" disabled /></label>
@@ -289,6 +293,7 @@
             <div class="help-row"><span>Move / Rotate / Scale</span><span><kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd></span></div>
             <div class="help-row"><span>Local / World</span><kbd>Q</kbd></div>
             <div class="help-row"><span>Unified scale</span><kbd>U</kbd></div>
+            <div class="help-row"><span>Precision align</span><kbd>G</kbd></div>
             <div class="help-row"><span>Bounding box</span><kbd>B</kbd></div>
             <div class="help-row"><span>Auto rotate</span><kbd>A</kbd></div>
             <div class="help-row"><span>Wire overlay</span><kbd>Shift+W</kbd></div>
