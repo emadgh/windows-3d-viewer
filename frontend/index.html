@@ -102,25 +102,25 @@
               <line id="alignXLine" class="precision-line precision-line-x" />
               <circle id="alignX1" class="precision-handle precision-handle-x" r="7" data-guide="x" data-point="p1" />
               <circle id="alignX2" class="precision-handle precision-handle-x" r="7" data-guide="x" data-point="p2" />
-              <text id="alignXLabel" class="precision-axis-label precision-axis-label-x">X</text>
+              <text id="alignXLabel" class="precision-axis-label precision-axis-label-x">X+</text>
             </g>
             <g class="precision-guide precision-guide-y" data-guide="y">
               <line id="alignYLine" class="precision-line precision-line-y" />
               <circle id="alignY1" class="precision-handle precision-handle-y" r="7" data-guide="y" data-point="p1" />
               <circle id="alignY2" class="precision-handle precision-handle-y" r="7" data-guide="y" data-point="p2" />
-              <text id="alignYLabel" class="precision-axis-label precision-axis-label-y">Y</text>
+              <text id="alignYLabel" class="precision-axis-label precision-axis-label-y">Y+</text>
             </g>
           </svg>
           <div class="precision-align-card">
             <div class="precision-align-title">
-              <span>Precision Align</span>
-              <small>Drag endpoints or the lines</small>
+              <span>Precision Align · Surface X/Y</span>
+              <small id="alignHitStatus">Place all 4 endpoints on the model</small>
             </div>
             <div class="precision-readouts">
-              <div><span>X tilt</span><strong id="alignXAngle">0.00°</strong></div>
-              <div><span>Y tilt</span><strong id="alignYAngle">0.00°</strong></div>
-              <div><span>Correction</span><strong id="alignCorrection">0.00°</strong></div>
-              <div><span>Axis error</span><strong id="alignAxisError">0.00°</strong></div>
+              <div><span>X span</span><strong id="alignXAngle">—</strong></div>
+              <div><span>Y span</span><strong id="alignYAngle">—</strong></div>
+              <div><span>Rotation Δ</span><strong id="alignCorrection">—</strong></div>
+              <div><span>Axis error</span><strong id="alignAxisError">—</strong></div>
             </div>
             <div class="precision-align-actions">
               <button id="alignResetButton" type="button">Reset guides</button>
