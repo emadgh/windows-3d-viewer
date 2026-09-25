@@ -17,6 +17,7 @@ walkdir = "2.5"
 wry = "0.57.0"
 
 [target.'cfg(windows)'.dependencies]
+rfd = "0.15.4"
 winreg = "0.56.0"
 update-via-github = { git = "https://github.com/emadgh/update-via-github.git", rev = "ec648957782ab800e14ddc6e0a15c694a46f1252" }
 
