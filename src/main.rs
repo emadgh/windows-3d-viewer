@@ -353,6 +353,25 @@ fn build_launch_state() -> Option<LaunchState> {
     build_launch_state_for_path(requested)
 }
 
+#[cfg(windows)]
+fn pick_model_file() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Open 3D model")
+        .add_filter(
+            "3D Models",
+            &[
+                "glb", "gltf", "fbx", "obj", "stl", "ply", "dae", "3mf", "3ds",
+                "usdz", "wrl", "vrml",
+            ],
+        )
+        .pick_file()
+}
+
+#[cfg(not(windows))]
+fn pick_model_file() -> Option<PathBuf> {
+    None
+}
+
 fn mime_for(path: &str) -> String {
     let extension = Path::new(path)
         .extension()
@@ -1141,6 +1160,25 @@ fn dispatch_bridge(
             .as_ref()
             .map(LaunchState::manifest)
             .unwrap_or(Value::Null)),
+        "app.pickModelFile" => {
+            let Some(path) = pick_model_file() else {
+                return Ok(json!({ "selected": false }));
+            };
+
+            let state = build_launch_state_for_path(path)
+                .ok_or_else(|| "The selected file could not be prepared for loading.".to_string())?;
+            let manifest = state.manifest();
+            *active_source = state
+                .find(&state.primary)
+                .map(|file| file.absolute.clone());
+            let _ = cancel_active_source_save(active_save_temp);
+            *launch_state = Some(state);
+
+            Ok(json!({
+                "selected": true,
+                "manifest": manifest,
+            }))
+        }
         "app.getActiveSource" => Ok(active_source_status(active_source)),
         "app.clearActiveSource" => {
             *active_source = None;
