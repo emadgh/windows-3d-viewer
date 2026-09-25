@@ -1,6 +1,7 @@
 import './settings.css';
 
 const settingsButton = document.querySelector('#settingsButton');
+const updateIndicatorButton = document.querySelector('#updateIndicatorButton');
 const modal = document.querySelector('#settingsModal');
 const closeButton = document.querySelector('#closeSettingsButton');
 const setDefaultButton = document.querySelector('#setDefaultButton');
@@ -49,8 +50,10 @@ updaterSection.innerHTML = `
   </div>
 `;
 
-const firstSettingsSection = modal.querySelector('.settings-section');
-firstSettingsSection.before(updaterSection);
+const firstSettingsSection = modal?.querySelector('.settings-section');
+if (modal && firstSettingsSection) {
+  modal.insertBefore(updaterSection, firstSettingsSection);
+}
 
 const updateVersionBadge = updaterSection.querySelector('#updateVersionBadge');
 const updateStateDot = updaterSection.querySelector('#updateStateDot');
@@ -64,6 +67,26 @@ const updateActionButton = updaterSection.querySelector('#updateActionButton');
 
 let updatePollTimer = null;
 let lastUpdateState = null;
+let backgroundUpdateTimer = null;
+
+function setUpdateIndicator(data) {
+  if (!updateIndicatorButton) return;
+  const visibleStates = new Set(['available', 'downloading', 'ready']);
+  const visible = visibleStates.has(data?.state);
+  updateIndicatorButton.hidden = !visible;
+  if (!visible) return;
+
+  const version = data?.latestVersion ? ` v${data.latestVersion}` : '';
+  const label = data?.state === 'ready'
+    ? `Update${version} ready to install`
+    : data?.state === 'downloading'
+      ? `Downloading update${version}`
+      : `Update${version} available`;
+  updateIndicatorButton.title = label;
+  updateIndicatorButton.setAttribute('aria-label', label);
+  updateIndicatorButton.classList.toggle('ready', data?.state === 'ready');
+  updateIndicatorButton.classList.toggle('downloading', data?.state === 'downloading');
+}
 
 function setAssociationStatus(message, isError = false) {
   status.textContent = message;
@@ -97,6 +120,7 @@ function formatBytes(bytes) {
 
 function renderUpdateStatus(data) {
   lastUpdateState = data || { state: 'failed', message: 'Invalid updater response.' };
+  setUpdateIndicator(lastUpdateState);
   const currentVersion = data?.currentVersion ? `v${data.currentVersion}` : 'v—';
   updateVersionBadge.textContent = currentVersion;
   updateStateDot.className = 'update-state-dot';
@@ -221,28 +245,42 @@ async function saveInstanceMode(singleInstance) {
   }
 }
 
-function showSettings() {
+function showSettings(options = {}) {
+  if (!modal) return;
   modal.hidden = false;
-  startUpdatePolling();
-  refreshInstanceMode();
-  requestAnimationFrame(() => closeButton.focus());
+
+  try { startUpdatePolling(); } catch (error) {
+    console.warn('Could not start updater polling.', error);
+  }
+  refreshInstanceMode().catch?.((error) => console.warn('Could not refresh instance mode.', error));
+
+  requestAnimationFrame(() => {
+    if (options.focusUpdater) {
+      updaterSection?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+      updateActionButton?.focus?.();
+    } else {
+      closeButton?.focus?.();
+    }
+  });
 }
 
 function hideSettings() {
+  if (!modal) return;
   modal.hidden = true;
   stopUpdatePolling();
-  settingsButton.focus();
+  settingsButton?.focus?.();
 }
 
-settingsButton.addEventListener('click', showSettings);
-closeButton.addEventListener('click', hideSettings);
+settingsButton?.addEventListener('click', () => showSettings());
+closeButton?.addEventListener('click', hideSettings);
+updateIndicatorButton?.addEventListener('click', () => showSettings({ focusUpdater: true }));
 
-modal.addEventListener('click', (event) => {
+modal?.addEventListener('click', (event) => {
   if (event.target === modal) hideSettings();
 });
 
 window.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !modal.hidden) hideSettings();
+  if (event.key === 'Escape' && modal && !modal.hidden) hideSettings();
 });
 
 singleInstanceRadio.addEventListener('change', () => {
@@ -334,3 +372,25 @@ async function openRepository(event) {
 
 githubRepositoryLink.addEventListener('click', openRepository);
 openRepositoryButton.addEventListener('click', openRepository);
+
+
+async function checkForUpdatesInBackground() {
+  if (!window.zero?.invoke) return;
+  try {
+    const status = await invokeNative('app.getUpdateStatus');
+    if (status?.state === 'available' || status?.state === 'ready' || status?.state === 'downloading') {
+      renderUpdateStatus(status);
+      return;
+    }
+    renderUpdateStatus(await invokeNative('app.checkForUpdates'));
+  } catch (error) {
+    console.warn('Background update check failed.', error);
+  }
+}
+
+function scheduleBackgroundUpdateCheck() {
+  if (backgroundUpdateTimer !== null) window.clearTimeout(backgroundUpdateTimer);
+  backgroundUpdateTimer = window.setTimeout(checkForUpdatesInBackground, 1400);
+}
+
+scheduleBackgroundUpdateCheck();
