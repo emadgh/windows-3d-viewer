@@ -243,10 +243,6 @@ scene.add(ground);
 
 const wireOverlayMaterial = new THREE.LineBasicMaterial({ color: 0x10151c, transparent: true, opacity: 0.5, depthTest: true });
 
-const manager = new THREE.LoadingManager();
-manager.addHandler(/\.tga$/i, new TGALoader(manager));
-manager.addHandler(/\.dds$/i, new DDSLoader(manager));
-
 let currentModel = null;
 let currentAnimations = [];
 let mixer = null;
@@ -258,8 +254,9 @@ let clayColor = DEFAULT_CLAY_COLOR;
 let lightingEnabled = true;
 let shadowsEnabled = true;
 let wireOverlayEnabled = false;
-let activeBlobUrls = [];
-let assetUrlMap = new Map();
+let loadSessionSerial = 0;
+let pendingLoadSession = null;
+let currentAssetSession = null;
 let isolationTarget = null;
 let visibilitySnapshot = null;
 let treeRows = [];
@@ -284,13 +281,6 @@ const precisionGuides = {
   y: { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 } },
 };
 const clock = new THREE.Clock();
-
-manager.setURLModifier((url) => resolveLocalAsset(url));
-manager.onStart = () => setStatus('Loading assets…');
-manager.onProgress = (_url, loaded, total) => {
-  if (total > 0) setStatus(`Loading assets… ${loaded}/${total}`);
-};
-manager.onError = (url) => setStatus(`Could not load dependency: ${shortenUrl(url)}`, true);
 
 function setStatus(text, isError = false) {
   ui.statusText.textContent = text;
@@ -317,36 +307,70 @@ function normalizePath(value) {
   return String(value).replace(/\\/g, '/').replace(/^\.\//, '').split(/[?#]/)[0].toLowerCase();
 }
 
-function resolveLocalAsset(url) {
-  if (!assetUrlMap.size) return url;
+function fileAssetKey(file) {
+  return normalizePath(file?.webkitRelativePath || file?.name || '');
+}
+
+function resolveSessionAsset(session, url) {
+  if (!session?.assetUrlMap?.size) return url;
   const normalized = normalizePath(url);
   const basename = normalized.split('/').pop();
-  if (assetUrlMap.has(normalized)) return assetUrlMap.get(normalized);
-  if (basename && assetUrlMap.has(basename)) return assetUrlMap.get(basename);
-  for (const [key, value] of assetUrlMap) {
+
+  if (session.assetUrlMap.has(normalized)) return session.assetUrlMap.get(normalized);
+  if (basename && session.assetUrlMap.has(basename)) return session.assetUrlMap.get(basename);
+
+  for (const [key, value] of session.assetUrlMap) {
     if (normalized.endsWith(`/${key}`)) return value;
   }
   return url;
 }
 
-function releaseBlobUrls() {
-  for (const url of activeBlobUrls) URL.revokeObjectURL(url);
-  activeBlobUrls = [];
-  assetUrlMap = new Map();
+function disposeAssetSession(session) {
+  if (!session || session.disposed) return;
+  session.disposed = true;
+  for (const url of session.blobUrls) URL.revokeObjectURL(url);
+  session.blobUrls.length = 0;
+  session.assetUrlMap.clear();
 }
 
-function prepareLocalAssets(files) {
-  releaseBlobUrls();
-  const nextMap = new Map();
+function createLoadSession(files) {
+  const session = {
+    id: ++loadSessionSerial,
+    manager: null,
+    assetUrlMap: new Map(),
+    blobUrls: [],
+    disposed: false,
+    cancelled: false,
+  };
+
   for (const file of files) {
     const url = URL.createObjectURL(file);
-    activeBlobUrls.push(url);
-    const relative = normalizePath(file.webkitRelativePath || file.name);
+    session.blobUrls.push(url);
+    const relative = fileAssetKey(file);
     const basename = normalizePath(file.name);
-    if (!nextMap.has(relative)) nextMap.set(relative, url);
-    if (!nextMap.has(basename)) nextMap.set(basename, url);
+    if (relative && !session.assetUrlMap.has(relative)) session.assetUrlMap.set(relative, url);
+    if (basename && !session.assetUrlMap.has(basename)) session.assetUrlMap.set(basename, url);
   }
-  assetUrlMap = nextMap;
+
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier((url) => resolveSessionAsset(session, url));
+  manager.addHandler(/\.tga$/i, new TGALoader(manager));
+  manager.addHandler(/\.dds$/i, new DDSLoader(manager));
+  manager.onStart = () => {
+    if (pendingLoadSession === session && !session.cancelled) setStatus('Loading assets…');
+  };
+  manager.onProgress = (_url, loaded, total) => {
+    if (pendingLoadSession === session && !session.cancelled && total > 0) {
+      setStatus(`Loading assets… ${loaded}/${total}`);
+    }
+  };
+  manager.onError = (url) => {
+    if (pendingLoadSession === session && !session.cancelled) {
+      setStatus(`Could not load dependency: ${shortenUrl(url)}`, true);
+    }
+  };
+  session.manager = manager;
+  return session;
 }
 
 function findPrimaryFile(files) {
@@ -363,7 +387,12 @@ async function loadFiles(fileList, options = {}) {
     return;
   }
 
+  if (pendingLoadSession) pendingLoadSession.cancelled = true;
   clearCurrentModel();
+
+  const session = createLoadSession(files);
+  pendingLoadSession = session;
+
   currentGlbSaveHandle = options.saveHandle && getExtension(primary.name) === 'glb'
     ? options.saveHandle
     : null;
@@ -375,7 +404,7 @@ async function loadFiles(fileList, options = {}) {
       console.warn('Could not clear native save target.', error);
     }
   }
-  prepareLocalAssets(files);
+
   currentFileName = primary.name;
   ui.modelName.textContent = primary.name;
   ui.formatText.textContent = getExtension(primary.name).toUpperCase();
@@ -383,11 +412,28 @@ async function loadFiles(fileList, options = {}) {
   setStatus(`Opening ${primary.name}…`);
 
   try {
-    const result = await loadModel(primary, files);
+    const result = await loadModel(primary, files, session);
+
+    if (pendingLoadSession !== session || session.cancelled) {
+      if (result?.object) disposeModelResources(result.object);
+      disposeAssetSession(session);
+      return;
+    }
+
     if (!result?.object) throw new Error('The loader did not return a scene object.');
+
+    pendingLoadSession = null;
+    currentAssetSession = session;
     installModel(result.object, result.animations || [], primary.name);
     setStatus(`${primary.name} loaded`);
   } catch (error) {
+    if (pendingLoadSession !== session || session.cancelled) {
+      disposeAssetSession(session);
+      return;
+    }
+
+    pendingLoadSession = null;
+    disposeAssetSession(session);
     console.error(error);
     setStatus(`Failed to open ${primary.name}: ${error?.message || error}`, true);
     ui.emptyState.hidden = false;
@@ -436,9 +482,11 @@ async function openWithFileSystemPicker() {
 // differences when assigning synthetic files to HTMLInputElement.files.
 window.__w3dvLoadFiles = loadFiles;
 
-async function loadModel(primary, files) {
+async function loadModel(primary, files, session) {
   const ext = getExtension(primary.name);
-  const sourceUrl = assetUrlMap.get(normalizePath(primary.name));
+  const manager = session.manager;
+  const sourceUrl = session.assetUrlMap.get(fileAssetKey(primary))
+    || session.assetUrlMap.get(normalizePath(primary.name));
   if (!sourceUrl) throw new Error('Could not create a local URL for the model.');
 
   switch (ext) {
@@ -472,7 +520,9 @@ async function loadModel(primary, files) {
       const mtl = files.find((file) => getExtension(file.name) === 'mtl' && file.name.replace(/\.mtl$/i, '').toLowerCase() === base)
         || files.find((file) => getExtension(file.name) === 'mtl');
       if (mtl) {
-        const mtlUrl = assetUrlMap.get(normalizePath(mtl.name));
+        const mtlUrl = session.assetUrlMap.get(fileAssetKey(mtl))
+          || session.assetUrlMap.get(normalizePath(mtl.name));
+        if (!mtlUrl) throw new Error(`Could not create a local URL for ${mtl.name}.`);
         const materials = await new MTLLoader(manager).loadAsync(mtlUrl);
         materials.preload();
         objLoader.setMaterials(materials);
@@ -578,6 +628,10 @@ function clearCurrentModel() {
     disposeModelResources(currentModel);
   }
   currentModel = null;
+  if (currentAssetSession) {
+    disposeAssetSession(currentAssetSession);
+    currentAssetSession = null;
+  }
   lastModelBounds = null;
   boundsBox.makeEmpty();
   boundsHelper.visible = false;
