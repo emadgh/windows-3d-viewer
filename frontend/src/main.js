@@ -341,6 +341,7 @@ function createLoadSession(files) {
     blobUrls: [],
     disposed: false,
     cancelled: false,
+    errors: [],
   };
 
   for (const file of files) {
@@ -365,6 +366,7 @@ function createLoadSession(files) {
     }
   };
   manager.onError = (url) => {
+    session.errors.push(String(url));
     if (pendingLoadSession === session && !session.cancelled) {
       setStatus(`Could not load dependency: ${shortenUrl(url)}`, true);
     }
@@ -425,7 +427,12 @@ async function loadFiles(fileList, options = {}) {
     pendingLoadSession = null;
     currentAssetSession = session;
     installModel(result.object, result.animations || [], primary.name);
-    setStatus(`${primary.name} loaded`);
+    if (session.errors.length) {
+      const unique = [...new Set(session.errors.map((url) => shortenUrl(url)))];
+      setStatus(`${primary.name} loaded · missing assets: ${unique.join(', ')}`, true);
+    } else {
+      setStatus(`${primary.name} loaded`);
+    }
   } catch (error) {
     if (pendingLoadSession !== session || session.cancelled) {
       disposeAssetSession(session);
@@ -443,6 +450,17 @@ async function loadFiles(fileList, options = {}) {
 }
 
 async function openWithFileSystemPicker() {
+  if (window.zero?.invoke && typeof window.__w3dvOpenNativeLaunchFile === 'function') {
+    try {
+      const result = await window.zero.invoke('app.pickModelFile', {});
+      if (!result?.selected) return;
+      await window.__w3dvOpenNativeLaunchFile();
+      return;
+    } catch (error) {
+      console.warn('Native model picker failed; using the WebView picker.', error);
+    }
+  }
+
   if (typeof window.showOpenFilePicker !== 'function') {
     ui.fileInput.click();
     return;
