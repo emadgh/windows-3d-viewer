@@ -59,6 +59,8 @@ const ui = {
   transformEnabled: document.querySelector('#transformEnabled'),
   transformModeButtons: Array.from(document.querySelectorAll('[data-transform-mode]')),
   transformSpace: document.querySelector('#transformSpace'),
+  transformPivot: document.querySelector('#transformPivot'),
+  unifiedScaleToggle: document.querySelector('#unifiedScaleToggle'),
   transformPositionX: document.querySelector('#transformPositionX'),
   transformPositionY: document.querySelector('#transformPositionY'),
   transformPositionZ: document.querySelector('#transformPositionZ'),
@@ -134,19 +136,28 @@ controls.target.set(0, 0, 0);
 controls.update();
 
 const transformControls = new TransformControls(camera, renderer.domElement);
+const transformPivotProxy = new THREE.Object3D();
+transformPivotProxy.name = '__viewer_transform_pivot__';
+transformPivotProxy.userData.viewerHelper = true;
+scene.add(transformPivotProxy);
 const transformHelper = transformControls.getHelper();
 transformHelper.visible = false;
 transformHelper.userData.viewerHelper = true;
 scene.add(transformHelper);
 
+let transformDragState = null;
 transformControls.addEventListener('mouseDown', () => {
   controls.enabled = false;
+  beginTransformProxyDrag();
 });
 transformControls.addEventListener('mouseUp', () => {
+  finishTransformProxyDrag();
   controls.enabled = true;
   refreshScalePersonAnchor();
+  if (glbTransformEnabled) syncTransformPivotProxy();
 });
 transformControls.addEventListener('objectChange', () => {
+  applyTransformProxyDelta();
   updateTransformFields();
   updateGlbTransformState();
   updateBoundsMeasurement();
@@ -255,6 +266,8 @@ let lastModelBounds = null;
 let boundsVisible = false;
 let glbTransformEnabled = false;
 let originalGlbTransform = null;
+let transformPivotMode = 'center';
+let unifiedScaleEnabled = false;
 let glbExportInProgress = false;
 let scalePersonVisible = true;
 let scalePersonAnchor = null;
@@ -646,6 +659,119 @@ function setScalePersonVisible(visible) {
   else positionScalePersonReference();
 }
 
+function getTransformPivotWorldPosition(mode = transformPivotMode) {
+  if (!currentModel) return new THREE.Vector3();
+  currentModel.updateWorldMatrix(true, true);
+  if (mode === 'object') return currentModel.getWorldPosition(new THREE.Vector3());
+
+  const box = new THREE.Box3().setFromObject(currentModel, true);
+  if (box.isEmpty()) return currentModel.getWorldPosition(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  if (mode === 'bottom') center.y = box.min.y;
+  return center;
+}
+
+function syncTransformPivotProxy() {
+  if (!currentModel) return;
+  const position = getTransformPivotWorldPosition();
+  transformPivotProxy.position.copy(position);
+
+  const worldSpace = ui.transformSpace?.value === 'world';
+  if (worldSpace) {
+    transformPivotProxy.quaternion.identity();
+  } else {
+    currentModel.getWorldQuaternion(transformPivotProxy.quaternion);
+  }
+  transformPivotProxy.scale.set(1, 1, 1);
+  transformPivotProxy.updateMatrixWorld(true);
+
+  // TransformControls internally treats scale as local. Orienting the proxy to
+  // world axes makes World scale genuinely different from Local scale.
+  const mode = transformControls.getMode();
+  transformControls.setSpace(mode === 'scale' ? 'local' : (worldSpace ? 'world' : 'local'));
+}
+
+function beginTransformProxyDrag() {
+  if (!glbTransformEnabled || !currentModel) return;
+  transformPivotProxy.updateMatrixWorld(true);
+  currentModel.updateMatrixWorld(true);
+  transformDragState = {
+    proxyStartWorld: transformPivotProxy.matrixWorld.clone(),
+    modelStartWorld: currentModel.matrixWorld.clone(),
+    startScale: currentModel.scale.clone(),
+  };
+}
+
+function applyTransformProxyDelta() {
+  if (!transformDragState || !currentModel) return;
+
+  transformPivotProxy.updateMatrixWorld(true);
+  const inverseStart = transformDragState.proxyStartWorld.clone().invert();
+  const delta = transformPivotProxy.matrixWorld.clone().multiply(inverseStart);
+  const desiredWorld = delta.multiply(transformDragState.modelStartWorld);
+
+  const parentInverse = currentModel.parent
+    ? currentModel.parent.matrixWorld.clone().invert()
+    : new THREE.Matrix4();
+  const localMatrix = parentInverse.multiply(desiredWorld);
+  localMatrix.decompose(currentModel.position, currentModel.quaternion, currentModel.scale);
+
+  const centerUniformScale = transformControls.getMode() === 'scale' && transformControls.axis === 'XYZ';
+  if ((unifiedScaleEnabled || centerUniformScale) && transformControls.getMode() === 'scale') {
+    const start = transformDragState.startScale;
+    const ratios = [
+      currentModel.scale.x / Math.max(Math.abs(start.x), 1e-9),
+      currentModel.scale.y / Math.max(Math.abs(start.y), 1e-9),
+      currentModel.scale.z / Math.max(Math.abs(start.z), 1e-9),
+    ];
+    let factor = ratios.reduce((best, value) => Math.abs(value - 1) > Math.abs(best - 1) ? value : best, 1);
+    if (!Number.isFinite(factor) || factor <= 0) factor = 1;
+
+    // The stock center handle uses a distance ratio and becomes excessively
+    // sensitive near the gizmo origin. Compress that ratio logarithmically.
+    if (centerUniformScale) factor = Math.exp(Math.log(factor) * 0.35);
+    factor = THREE.MathUtils.clamp(factor, 0.001, 1000);
+
+    const startWorldPosition = new THREE.Vector3();
+    const startWorldQuaternion = new THREE.Quaternion();
+    const startWorldScale = new THREE.Vector3();
+    transformDragState.modelStartWorld.decompose(startWorldPosition, startWorldQuaternion, startWorldScale);
+    const pivotWorld = new THREE.Vector3().setFromMatrixPosition(transformDragState.proxyStartWorld);
+    const scaledWorldPosition = startWorldPosition.clone().sub(pivotWorld).multiplyScalar(factor).add(pivotWorld);
+    const uniformWorld = new THREE.Matrix4().compose(
+      scaledWorldPosition,
+      startWorldQuaternion,
+      startWorldScale.multiplyScalar(factor),
+    );
+    const uniformLocal = (currentModel.parent ? currentModel.parent.matrixWorld.clone().invert() : new THREE.Matrix4())
+      .multiply(uniformWorld);
+    uniformLocal.decompose(currentModel.position, currentModel.quaternion, currentModel.scale);
+  }
+
+  currentModel.updateMatrixWorld(true);
+}
+
+function finishTransformProxyDrag() {
+  if (!transformDragState) return;
+  applyTransformProxyDelta();
+  transformDragState = null;
+  syncTransformPivotProxy();
+}
+
+function setTransformPivotMode(mode) {
+  transformPivotMode = ['center', 'object', 'bottom'].includes(mode) ? mode : 'center';
+  if (ui.transformPivot) ui.transformPivot.value = transformPivotMode;
+  if (glbTransformEnabled) syncTransformPivotProxy();
+}
+
+function setUnifiedScaleEnabled(enabled) {
+  unifiedScaleEnabled = Boolean(enabled);
+  if (ui.unifiedScaleToggle) {
+    ui.unifiedScaleToggle.checked = unifiedScaleEnabled;
+    ui.unifiedScaleToggle.closest('.scale-lock-toggle')?.classList.toggle('active', unifiedScaleEnabled);
+  }
+}
+
 function configureGlbTransformTools() {
   const available = isGlbModel();
   ui.transformPanel.hidden = !available;
@@ -664,6 +790,9 @@ function configureGlbTransformTools() {
 
   ui.transformEnabled.checked = false;
   ui.transformSpace.value = 'local';
+  ui.transformPivot.value = 'center';
+  transformPivotMode = 'center';
+  setUnifiedScaleEnabled(false);
   transformControls.setMode('translate');
   transformControls.setSpace('local');
   setTransformModeButtonState('translate');
@@ -678,7 +807,8 @@ function setGlbTransformEnabled(enabled) {
   if (!glbTransformEnabled && precisionAlignActive) stopPrecisionAlign(false);
 
   if (glbTransformEnabled) {
-    transformControls.attach(currentModel);
+    syncTransformPivotProxy();
+    transformControls.attach(transformPivotProxy);
     transformHelper.visible = true;
   } else {
     transformControls.detach();
@@ -688,6 +818,8 @@ function setGlbTransformEnabled(enabled) {
 
   ui.transformModeButtons.forEach((button) => { button.disabled = !glbTransformEnabled; });
   ui.transformSpace.disabled = !glbTransformEnabled;
+  ui.transformPivot.disabled = !glbTransformEnabled;
+  ui.unifiedScaleToggle.disabled = !glbTransformEnabled;
   ui.precisionAlignButton.disabled = !glbTransformEnabled;
   [
     ui.transformPositionX, ui.transformPositionY, ui.transformPositionZ,
@@ -708,6 +840,7 @@ function setTransformModeButtonState(mode) {
 function setTransformMode(mode) {
   if (!glbTransformEnabled || !['translate', 'rotate', 'scale'].includes(mode)) return;
   transformControls.setMode(mode);
+  syncTransformPivotProxy();
   setTransformModeButtonState(mode);
 }
 
@@ -754,7 +887,7 @@ function updateGlbTransformState() {
   ui.saveGlbButton.disabled = !isGlbModel() || glbExportInProgress;
 }
 
-function applyTransformFields() {
+function applyTransformFields(changedInput = null) {
   if (!glbTransformEnabled || !isGlbModel()) return;
 
   currentModel.position.set(
@@ -771,11 +904,17 @@ function applyTransformFields() {
   );
 
   const minScale = 0.000001;
-  currentModel.scale.set(
+  const nextScale = new THREE.Vector3(
     Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleX, currentModel.scale.x))),
     Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleY, currentModel.scale.y))),
     Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleZ, currentModel.scale.z))),
   );
+  if (unifiedScaleEnabled && [ui.transformScaleX, ui.transformScaleY, ui.transformScaleZ].includes(changedInput)) {
+    const value = changedInput === ui.transformScaleX ? nextScale.x
+      : changedInput === ui.transformScaleY ? nextScale.y : nextScale.z;
+    nextScale.set(value, value, value);
+  }
+  currentModel.scale.copy(nextScale);
 
   currentModel.updateMatrixWorld(true);
   updateTransformFields();
@@ -1709,14 +1848,16 @@ ui.transformModeButtons.forEach((button) => {
 });
 ui.transformSpace.addEventListener('change', () => {
   if (!glbTransformEnabled) return;
-  transformControls.setSpace(ui.transformSpace.value === 'world' ? 'world' : 'local');
+  syncTransformPivotProxy();
 });
+ui.transformPivot.addEventListener('change', () => setTransformPivotMode(ui.transformPivot.value));
+ui.unifiedScaleToggle.addEventListener('change', () => setUnifiedScaleEnabled(ui.unifiedScaleToggle.checked));
 [
   ui.transformPositionX, ui.transformPositionY, ui.transformPositionZ,
   ui.transformRotationX, ui.transformRotationY, ui.transformRotationZ,
   ui.transformScaleX, ui.transformScaleY, ui.transformScaleZ,
 ].forEach((input) => {
-  input.addEventListener('change', applyTransformFields);
+  input.addEventListener('change', () => applyTransformFields(input));
 });
 ui.resetTransformButton.addEventListener('click', resetGlbTransform);
 ui.saveGlbButton.addEventListener('click', exportCurrentGlb);
@@ -1756,10 +1897,33 @@ ui.treeSearch.addEventListener('input', () => filterTree(ui.treeSearch.value));
 ui.clearIsolationButton.addEventListener('click', () => clearIsolation());
 renderer.domElement.addEventListener('dblclick', handleDoubleClick);
 
+function toggleCheckboxControl(input) {
+  if (!input) return;
+  input.checked = !input.checked;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function cycleViewMode() {
+  const modes = ['textured-lighting', 'textured', 'clay', 'wireframe'];
+  const index = modes.indexOf(currentMode);
+  applyRenderMode(modes[(index + 1) % modes.length]);
+}
+
 window.addEventListener('keydown', (event) => {
-  if (event.ctrlKey || event.metaKey || event.altKey) return;
   const tag = document.activeElement?.tagName?.toLowerCase();
-  if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+  const editingField = tag === 'input' || tag === 'select' || tag === 'textarea';
+
+  if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+    if (event.key.toLowerCase() === 'o') {
+      event.preventDefault();
+      ui.fileInput.click();
+    } else if (event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      if (isGlbModel()) exportCurrentGlb();
+    }
+    return;
+  }
+  if (event.altKey || editingField) return;
 
   if (precisionAlignActive) {
     if (event.key === 'Escape') {
@@ -1772,10 +1936,31 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
-  if (!glbTransformEnabled) return;
-  if (event.key.toLowerCase() === 'w') setTransformMode('translate');
-  else if (event.key.toLowerCase() === 'e') setTransformMode('rotate');
-  else if (event.key.toLowerCase() === 'r') setTransformMode('scale');
+  const key = event.key.toLowerCase();
+  if (key === 'f' && currentModel) fitObject(isolationTarget || currentModel, true);
+  else if (key === 'v') cycleViewMode();
+  else if (key === 'b') {
+    boundsVisible = !boundsVisible;
+    ui.boundsToggleButton.textContent = boundsVisible ? 'Hide box' : 'Show box';
+    ui.boundsToggleButton.setAttribute('aria-pressed', String(boundsVisible));
+    updateBoundsMeasurement();
+  } else if (key === 'a') toggleCheckboxControl(ui.autorotateToggle);
+  else if (key === 'l') toggleCheckboxControl(ui.lightingToggle);
+  else if (key === 'p') setScalePersonVisible(!scalePersonVisible);
+  else if (key === 'c') takeScreenshot();
+  else if (key === 'q' && glbTransformEnabled) {
+    ui.transformSpace.value = ui.transformSpace.value === 'local' ? 'world' : 'local';
+    syncTransformPivotProxy();
+  } else if (key === 'u' && glbTransformEnabled) {
+    setUnifiedScaleEnabled(!unifiedScaleEnabled);
+  } else if (event.key === 'Tab' && isGlbModel()) {
+    event.preventDefault();
+    setGlbTransformEnabled(!glbTransformEnabled);
+  } else if (key === 'w' && event.shiftKey) {
+    toggleCheckboxControl(ui.wireToggle);
+  } else if (glbTransformEnabled && key === 'w') setTransformMode('translate');
+  else if (glbTransformEnabled && key === 'e') setTransformMode('rotate');
+  else if (glbTransformEnabled && key === 'r') setTransformMode('scale');
 });
 
 let dragDepth = 0;
