@@ -437,21 +437,33 @@ function findPrimaryFile(files) {
   return files.find((file) => MODEL_EXTENSIONS.has(getExtension(file.name))) || null;
 }
 
-async function refreshNativeGlbSourceState() {
-  if (getExtension(currentFileName) !== 'glb' || !window.zero?.invoke) {
+async function refreshNativeGlbSourceState(expectedSessionId = activeModelSessionId) {
+  if (expectedSessionId !== activeModelSessionId || getExtension(currentFileName) !== 'glb' || !window.zero?.invoke) {
     currentGlbNativeSource = false;
+    if (saveTargetSessionId === expectedSessionId) saveTargetSessionId = 0;
     return false;
   }
 
   try {
     const source = await window.zero.invoke('app.getActiveSource', {});
-    currentGlbNativeSource = Boolean(source?.available);
+    const sourceName = String(source?.name || '');
+    const matchesCurrentFile = Boolean(source?.available && sourceName && sourceName === currentFileName);
+    currentGlbNativeSource = matchesCurrentFile;
+    if (matchesCurrentFile) saveTargetSessionId = expectedSessionId;
+    else if (saveTargetSessionId === expectedSessionId) saveTargetSessionId = 0;
     return currentGlbNativeSource;
   } catch (error) {
     console.warn('Could not query native GLB source path.', error);
     currentGlbNativeSource = false;
+    if (saveTargetSessionId === expectedSessionId) saveTargetSessionId = 0;
     return false;
   }
+}
+
+function invalidateCurrentSaveTarget() {
+  currentGlbSaveHandle = null;
+  currentGlbNativeSource = false;
+  saveTargetSessionId = 0;
 }
 
 async function loadFiles(fileList, options = {}) {
@@ -465,15 +477,20 @@ async function loadFiles(fileList, options = {}) {
   }
 
   if (pendingLoadSession) pendingLoadSession.cancelled = true;
+
+  invalidateCurrentSaveTarget();
+  const modelSessionId = ++activeModelSessionId;
   clearCurrentModel();
 
   const session = createLoadSession(files);
+  session.modelSessionId = modelSessionId;
   pendingLoadSession = session;
 
   currentGlbSaveHandle = options.saveHandle && getExtension(primary.name) === 'glb'
     ? options.saveHandle
     : null;
   currentGlbNativeSource = Boolean(options.nativeSource && getExtension(primary.name) === 'glb');
+  if (currentGlbSaveHandle || currentGlbNativeSource) saveTargetSessionId = modelSessionId;
   if (!options.nativeSource && window.zero?.invoke) {
     try {
       await window.zero.invoke('app.clearActiveSource', {});
@@ -484,7 +501,7 @@ async function loadFiles(fileList, options = {}) {
 
   currentFileName = primary.name;
   if (!currentGlbSaveHandle && getExtension(primary.name) === 'glb') {
-    await refreshNativeGlbSourceState();
+    await refreshNativeGlbSourceState(modelSessionId);
   }
   ui.modelName.textContent = primary.name;
   ui.formatText.textContent = getExtension(primary.name).toUpperCase();
@@ -497,7 +514,7 @@ async function loadFiles(fileList, options = {}) {
       : null;
     const result = await loadModel(primary, files, session);
 
-    if (pendingLoadSession !== session || session.cancelled) {
+    if (pendingLoadSession !== session || session.cancelled || activeModelSessionId !== modelSessionId) {
       if (result?.object) disposeModelResources(result.object);
       disposeAssetSession(session);
       return;
@@ -528,7 +545,7 @@ async function loadFiles(fileList, options = {}) {
       setStatus(`${primary.name} loaded`);
     }
   } catch (error) {
-    if (pendingLoadSession !== session || session.cancelled) {
+    if (pendingLoadSession !== session || session.cancelled || activeModelSessionId !== modelSessionId) {
       disposeAssetSession(session);
       return;
     }
@@ -1261,7 +1278,8 @@ function updateGlbTransformState() {
 
   const isGlb = isGlbModel();
   const busy = glbExportInProgress;
-  const hasOverwriteTarget = Boolean(currentGlbSaveHandle || currentGlbNativeSource);
+  const hasOverwriteTarget = saveTargetSessionId === activeModelSessionId
+    && Boolean(currentGlbSaveHandle || currentGlbNativeSource);
 
   ui.saveButton.disabled = !isGlb || busy || !hasOverwriteTarget;
   ui.saveAsButton.disabled = !isGlb || busy;
