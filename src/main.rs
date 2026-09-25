@@ -5,7 +5,7 @@ use std::{
     env,
     error::Error,
     fs::{self, File},
-    io::{Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -450,6 +450,137 @@ fn read_launch_file_chunk(state: &LaunchState, payload: &Value) -> Result<Value,
         "eof": next_offset >= length,
         "length": length,
     }))
+}
+
+fn active_source_status(active_source: &Option<PathBuf>) -> Value {
+    active_source
+        .as_ref()
+        .map(|path| {
+            json!({
+                "available": true,
+                "name": path.file_name().map(|name| name.to_string_lossy().into_owned()),
+            })
+        })
+        .unwrap_or_else(|| json!({ "available": false }))
+}
+
+fn active_source_temp_path(target: &Path) -> PathBuf {
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "model.glb".to_string());
+    target.with_file_name(format!(".{name}.w3dv.tmp"))
+}
+
+fn active_source_backup_path(target: &Path) -> PathBuf {
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "model.glb".to_string());
+    target.with_file_name(format!(".{name}.w3dv.bak"))
+}
+
+fn begin_active_source_save(
+    active_source: &Option<PathBuf>,
+    active_save_temp: &mut Option<PathBuf>,
+) -> Result<Value, String> {
+    let target = active_source
+        .as_ref()
+        .ok_or_else(|| "The current model has no writable source path.".to_string())?;
+
+    if extension_lower(target).as_deref() != Some("glb") {
+        return Err("Only GLB files can be overwritten.".to_string());
+    }
+
+    let temp = active_source_temp_path(target);
+    if temp.exists() {
+        fs::remove_file(&temp)
+            .map_err(|error| format!("Could not clear temporary save file: {error}"))?;
+    }
+    File::create(&temp)
+        .map_err(|error| format!("Could not create temporary GLB save file: {error}"))?;
+    *active_save_temp = Some(temp);
+
+    Ok(json!({
+        "ready": true,
+        "name": target.file_name().map(|name| name.to_string_lossy().into_owned()),
+    }))
+}
+
+fn write_active_source_save_chunk(
+    active_save_temp: &Option<PathBuf>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let temp = active_save_temp
+        .as_ref()
+        .ok_or_else(|| "No GLB overwrite operation is active.".to_string())?;
+    let offset = payload
+        .get("offset")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "Missing save chunk offset.".to_string())?;
+    let encoded = payload
+        .get("data")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Missing save chunk data.".to_string())?;
+    let bytes = BASE64
+        .decode(encoded)
+        .map_err(|error| format!("Invalid GLB save chunk: {error}"))?;
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(temp)
+        .map_err(|error| format!("Could not open temporary GLB save file: {error}"))?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|error| format!("Could not seek temporary GLB save file: {error}"))?;
+    file.write_all(&bytes)
+        .map_err(|error| format!("Could not write GLB save chunk: {error}"))?;
+
+    Ok(json!({
+        "written": bytes.len(),
+        "nextOffset": offset + bytes.len() as u64,
+    }))
+}
+
+fn finish_active_source_save(
+    active_source: &Option<PathBuf>,
+    active_save_temp: &mut Option<PathBuf>,
+) -> Result<Value, String> {
+    let target = active_source
+        .as_ref()
+        .ok_or_else(|| "The current model has no writable source path.".to_string())?;
+    let temp = active_save_temp
+        .take()
+        .ok_or_else(|| "No GLB overwrite operation is active.".to_string())?;
+
+    let backup = active_source_backup_path(target);
+    if backup.exists() {
+        fs::remove_file(&backup)
+            .map_err(|error| format!("Could not clear previous GLB backup: {error}"))?;
+    }
+
+    fs::rename(target, &backup)
+        .map_err(|error| format!("Could not prepare original GLB for replacement: {error}"))?;
+
+    if let Err(error) = fs::rename(&temp, target) {
+        let _ = fs::rename(&backup, target);
+        let _ = fs::remove_file(&temp);
+        return Err(format!("Could not replace original GLB: {error}"));
+    }
+
+    let _ = fs::remove_file(&backup);
+    let size = fs::metadata(target).map(|metadata| metadata.len()).unwrap_or(0);
+    Ok(json!({
+        "saved": true,
+        "bytes": size,
+        "name": target.file_name().map(|name| name.to_string_lossy().into_owned()),
+    }))
+}
+
+fn cancel_active_source_save(active_save_temp: &mut Option<PathBuf>) -> Value {
+    if let Some(temp) = active_save_temp.take() {
+        let _ = fs::remove_file(temp);
+    }
+    json!({ "cancelled": true })
 }
 
 #[cfg(windows)]
@@ -965,6 +1096,8 @@ fn dispatch_updater_command(_updater: &AppUpdater, command: &str) -> Result<Valu
 
 fn dispatch_bridge(
     launch_state: &mut Option<LaunchState>,
+    active_source: &mut Option<PathBuf>,
+    active_save_temp: &mut Option<PathBuf>,
     updater: &AppUpdater,
     request: &BridgeRequest,
 ) -> Result<Value, String> {
@@ -1008,6 +1141,21 @@ fn dispatch_bridge(
             .as_ref()
             .map(LaunchState::manifest)
             .unwrap_or(Value::Null)),
+        "app.getActiveSource" => Ok(active_source_status(active_source)),
+        "app.clearActiveSource" => {
+            *active_source = None;
+            Ok(cancel_active_source_save(active_save_temp))
+        }
+        "app.beginActiveSourceSave" => {
+            begin_active_source_save(active_source, active_save_temp)
+        }
+        "app.writeActiveSourceSaveChunk" => {
+            write_active_source_save_chunk(active_save_temp, &request.payload)
+        }
+        "app.finishActiveSourceSave" => {
+            finish_active_source_save(active_source, active_save_temp)
+        }
+        "app.cancelActiveSourceSave" => Ok(cancel_active_source_save(active_save_temp)),
         "app.readLaunchFileChunk" => {
             let state = launch_state
                 .as_ref()
@@ -1024,6 +1172,8 @@ fn dispatch_bridge(
 
 fn bridge_response_script(
     launch_state: &mut Option<LaunchState>,
+    active_source: &mut Option<PathBuf>,
+    active_save_temp: &mut Option<PathBuf>,
     updater: &AppUpdater,
     raw: &str,
 ) -> String {
@@ -1033,7 +1183,13 @@ fn bridge_response_script(
     };
 
     let id = serde_json::to_string(&request.id).unwrap_or_else(|_| "\"\"".to_string());
-    match dispatch_bridge(launch_state, updater, &request) {
+    match dispatch_bridge(
+        launch_state,
+        active_source,
+        active_save_temp,
+        updater,
+        &request,
+    ) {
         Ok(value) => {
             let value = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
             format!("window.__w3dvResolve({id}, true, {value});")
@@ -1101,6 +1257,12 @@ fn run_app() -> Result<(), Box<dyn Error>> {
 
     let webview = builder.build(&window)?;
     let mut launch_state = build_launch_state();
+    let mut active_source = launch_state.as_ref().and_then(|state| {
+        state
+            .find(&state.primary)
+            .map(|file| file.absolute.clone())
+    });
+    let mut active_save_temp: Option<PathBuf> = None;
     let updater = build_updater();
     start_initial_update_check(&updater);
     #[cfg(windows)]
@@ -1112,7 +1274,13 @@ fn run_app() -> Result<(), Box<dyn Error>> {
 
         match event {
             Event::UserEvent(UserEvent::Bridge(raw)) => {
-                let script = bridge_response_script(&mut launch_state, &updater, &raw);
+                let script = bridge_response_script(
+                    &mut launch_state,
+                    &mut active_source,
+                    &mut active_save_temp,
+                    &updater,
+                    &raw,
+                );
                 if !script.is_empty() {
                     let _ = webview.evaluate_script(&script);
                 }
@@ -1135,6 +1303,12 @@ fn run_app() -> Result<(), Box<dyn Error>> {
                 });
             }
             Event::UserEvent(UserEvent::LaunchReady(Some(state))) => {
+                active_source = state
+                    .find(&state.primary)
+                    .map(|file| file.absolute.clone());
+                if let Some(temp) = active_save_temp.take() {
+                    let _ = fs::remove_file(temp);
+                }
                 launch_state = Some(state);
                 let _ = webview.evaluate_script("window.__w3dvOpenNativeLaunchFile?.();");
             }
