@@ -716,7 +716,8 @@ function applyTransformProxyDelta() {
   const localMatrix = parentInverse.multiply(desiredWorld);
   localMatrix.decompose(currentModel.position, currentModel.quaternion, currentModel.scale);
 
-  if (unifiedScaleEnabled && transformControls.getMode() === 'scale') {
+  const centerUniformScale = transformControls.getMode() === 'scale' && transformControls.axis === 'XYZ';
+  if ((unifiedScaleEnabled || centerUniformScale) && transformControls.getMode() === 'scale') {
     const start = transformDragState.startScale;
     const ratios = [
       currentModel.scale.x / Math.max(Math.abs(start.x), 1e-9),
@@ -724,9 +725,27 @@ function applyTransformProxyDelta() {
       currentModel.scale.z / Math.max(Math.abs(start.z), 1e-9),
     ];
     let factor = ratios.reduce((best, value) => Math.abs(value - 1) > Math.abs(best - 1) ? value : best, 1);
-    if (!Number.isFinite(factor)) factor = 1;
+    if (!Number.isFinite(factor) || factor <= 0) factor = 1;
+
+    // The stock center handle uses a distance ratio and becomes excessively
+    // sensitive near the gizmo origin. Compress that ratio logarithmically.
+    if (centerUniformScale) factor = Math.exp(Math.log(factor) * 0.35);
     factor = THREE.MathUtils.clamp(factor, 0.001, 1000);
-    currentModel.scale.copy(start).multiplyScalar(factor);
+
+    const startWorldPosition = new THREE.Vector3();
+    const startWorldQuaternion = new THREE.Quaternion();
+    const startWorldScale = new THREE.Vector3();
+    transformDragState.modelStartWorld.decompose(startWorldPosition, startWorldQuaternion, startWorldScale);
+    const pivotWorld = new THREE.Vector3().setFromMatrixPosition(transformDragState.proxyStartWorld);
+    const scaledWorldPosition = startWorldPosition.clone().sub(pivotWorld).multiplyScalar(factor).add(pivotWorld);
+    const uniformWorld = new THREE.Matrix4().compose(
+      scaledWorldPosition,
+      startWorldQuaternion,
+      startWorldScale.multiplyScalar(factor),
+    );
+    const uniformLocal = (currentModel.parent ? currentModel.parent.matrixWorld.clone().invert() : new THREE.Matrix4())
+      .multiply(uniformWorld);
+    uniformLocal.decompose(currentModel.position, currentModel.quaternion, currentModel.scale);
   }
 
   currentModel.updateMatrixWorld(true);
