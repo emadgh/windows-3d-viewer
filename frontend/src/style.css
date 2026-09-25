@@ -171,6 +171,53 @@ svg { display: block; }
 .toggle:has(input:checked) { color: #c8d7f1; }
 .icon-button-top { width: 34px; padding: 0; }
 .icon-button-top svg { width: 17px; height: 17px; }
+.toolbar-icon-only {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+}
+.toolbar-icon-only svg {
+  width: 18px;
+  height: 18px;
+}
+.update-indicator-button {
+  position: relative;
+  border-color: rgba(91,140,255,.28);
+  background: rgba(91,140,255,.09);
+  color: #a9c0ff;
+}
+.update-indicator-button:hover {
+  border-color: rgba(91,140,255,.48);
+  background: rgba(91,140,255,.16);
+  color: #d2deff;
+}
+.update-indicator-button.ready {
+  border-color: rgba(80,196,143,.34);
+  background: rgba(80,196,143,.09);
+  color: #9fe0bf;
+}
+.update-indicator-button.downloading svg {
+  animation: updateIconPulse 1.1s ease-in-out infinite;
+}
+.update-indicator-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid #111821;
+  border-radius: 50%;
+  background: #6e9cff;
+  box-shadow: 0 0 0 2px rgba(110,156,255,.16);
+}
+.update-indicator-button.ready .update-indicator-dot {
+  background: #50c48f;
+  box-shadow: 0 0 0 2px rgba(80,196,143,.14);
+}
+@keyframes updateIconPulse {
+  0%,100% { opacity: .55; }
+  50% { opacity: 1; }
+}
 
 .workspace {
   min-width: 0;
