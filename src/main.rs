@@ -1344,6 +1344,7 @@ fn run_app() -> Result<(), Box<dyn Error>> {
                 }
             }
             Event::UserEvent(UserEvent::OpenFile(path)) => {
+                let _ = webview.evaluate_script("window.__w3dvBeginOpenTransition?.();");
                 let file_name = path
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
