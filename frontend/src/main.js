@@ -1893,6 +1893,7 @@ async function saveCurrentGlb() {
 async function saveAsCurrentGlb() {
   if (!isGlbModel() || glbExportInProgress) return;
 
+  const sessionId = activeModelSessionId;
   const base = currentFileName.replace(/\.glb$/i, '') || 'model';
   const suggestedName = `${base}-edited.glb`;
 
@@ -1904,16 +1905,25 @@ async function saveAsCurrentGlb() {
     return;
   }
 
+  if (sessionId !== activeModelSessionId || !isGlbModel()) {
+    setStatus('Save As cancelled because the active model changed.', true);
+    return;
+  }
+
   await runGlbSave('Saving GLB as…', async () => {
     const buffer = await createCurrentGlbBuffer();
     const blob = new Blob([buffer], { type: 'model/gltf-binary' });
+
+    if (sessionId !== activeModelSessionId) {
+      throw new Error('The active model changed before Save As completed.');
+    }
 
     if (target?.handle) {
       await writeBlobToHandle(target.handle, blob);
       currentGlbSaveHandle = target.handle;
       currentGlbNativeSource = false;
       nativeSourceSessionId = 0;
-      saveTargetSessionId = activeModelSessionId;
+      saveTargetSessionId = sessionId;
       if (window.zero?.invoke) {
         try {
           await window.zero.invoke('app.clearActiveSource', {});
