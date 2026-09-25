@@ -1096,9 +1096,16 @@ function updateGlbTransformState() {
   const changed = hasGlbTransformChanged();
   ui.transformState.textContent = changed ? 'Modified' : 'Original';
   ui.transformState.classList.toggle('modified', changed);
-  const disabled = !isGlbModel() || glbExportInProgress;
-  ui.saveButton.disabled = disabled;
-  ui.saveAsButton.disabled = disabled;
+
+  const isGlb = isGlbModel();
+  const busy = glbExportInProgress;
+  const hasOverwriteTarget = Boolean(currentGlbSaveHandle || currentGlbNativeSource);
+
+  ui.saveButton.disabled = !isGlb || busy || !hasOverwriteTarget;
+  ui.saveAsButton.disabled = !isGlb || busy;
+  ui.saveButton.title = hasOverwriteTarget
+    ? 'Save GLB · Ctrl+S'
+    : 'Save unavailable until the file has a writable source. Use Save As once.';
 }
 
 function applyTransformFields(changedInput = null) {
@@ -1632,7 +1639,14 @@ async function saveCurrentGlb() {
   if (!isGlbModel() || glbExportInProgress) return;
 
   if (!currentGlbSaveHandle && !currentGlbNativeSource) {
-    await saveAsCurrentGlb();
+    setStatus('Save cannot overwrite this file. Use Save As once to choose a writable file.', true);
+    return;
+  }
+
+  const targetName = currentGlbSaveHandle?.name || currentFileName || 'current GLB';
+  const confirmed = window.confirm(`Overwrite "${targetName}" with the current model?`);
+  if (!confirmed) {
+    setStatus('Save cancelled');
     return;
   }
 
