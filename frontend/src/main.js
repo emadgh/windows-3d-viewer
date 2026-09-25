@@ -86,6 +86,7 @@ const ui = {
   alignYAngle: document.querySelector('#alignYAngle'),
   alignCorrection: document.querySelector('#alignCorrection'),
   alignAxisError: document.querySelector('#alignAxisError'),
+  alignHitStatus: document.querySelector('#alignHitStatus'),
   alignResetButton: document.querySelector('#alignResetButton'),
   alignCancelButton: document.querySelector('#alignCancelButton'),
   alignConfirmButton: document.querySelector('#alignConfirmButton'),
@@ -260,6 +261,8 @@ let scalePersonAnchor = null;
 let precisionAlignActive = false;
 let precisionAlignDrag = null;
 let precisionAlignAutoRotateWasEnabled = false;
+let precisionSurfaceSample = null;
+const precisionRaycaster = new THREE.Raycaster();
 const precisionGuides = {
   x: { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 } },
   y: { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 } },
@@ -850,31 +853,132 @@ function setSvgPoint(circle, point) {
   circle.setAttribute('cy', point.y);
 }
 
-function guideAngleDegrees(guide) {
-  return THREE.MathUtils.radToDeg(Math.atan2(guide.p2.y - guide.p1.y, guide.p2.x - guide.p1.x));
-}
-
 function guideLength(guide) {
   return Math.hypot(guide.p2.x - guide.p1.x, guide.p2.y - guide.p1.y);
 }
 
-function normalizeAxisDegrees(value) {
-  return ((value + 90) % 180 + 180) % 180 - 90;
+function precisionPointToNdc(point) {
+  const { width, height } = getPrecisionViewportSize();
+  return new THREE.Vector2(
+    (point.x / width) * 2 - 1,
+    -(point.y / height) * 2 + 1,
+  );
 }
 
-function getPrecisionAlignMetrics() {
-  const xAngle = guideAngleDegrees(precisionGuides.x);
-  const yAngle = guideAngleDegrees(precisionGuides.y);
-  const xTilt = normalizeAxisDegrees(xAngle);
-  const yTilt = normalizeAxisDegrees(yAngle - 90);
-  const separation = Math.abs(normalizeAxisDegrees(yAngle - xAngle));
-  const axisError = Math.abs(90 - separation);
-  const correction = -(xTilt + yTilt) * 0.5;
-  const valid = guideLength(precisionGuides.x) >= 28 && guideLength(precisionGuides.y) >= 28;
-  return { xTilt, yTilt, correction, axisError, valid };
+function raycastPrecisionPoint(point) {
+  if (!currentModel) return null;
+  precisionRaycaster.setFromCamera(precisionPointToNdc(point), camera);
+  const hit = precisionRaycaster
+    .intersectObject(currentModel, true)
+    .find((entry) => !entry.object.userData?.viewerHelper && entry.object.visible);
+  return hit ? hit.point.clone() : null;
 }
 
-function renderPrecisionAlignGuides() {
+function samplePrecisionSurface() {
+  if (!currentModel) return { valid: false, hitCount: 0 };
+
+  currentModel.updateWorldMatrix(true, true);
+
+  const x1 = raycastPrecisionPoint(precisionGuides.x.p1);
+  const x2 = raycastPrecisionPoint(precisionGuides.x.p2);
+  const y1 = raycastPrecisionPoint(precisionGuides.y.p1);
+  const y2 = raycastPrecisionPoint(precisionGuides.y.p2);
+  const hits = { x1, x2, y1, y2 };
+  const hitCount = Object.values(hits).filter(Boolean).length;
+
+  if (hitCount !== 4) return { valid: false, hitCount, hits };
+
+  const xVector = x2.clone().sub(x1);
+  const yVector = y2.clone().sub(y1);
+  const xLength = xVector.length();
+  const yLength = yVector.length();
+  if (xLength < 1e-8 || yLength < 1e-8) {
+    return { valid: false, hitCount, hits, reason: 'Guide span is too short.' };
+  }
+
+  const xAxis = xVector.clone().normalize();
+  const yRaw = yVector.clone().normalize();
+  const rawDot = THREE.MathUtils.clamp(xAxis.dot(yRaw), -1, 1);
+  const rawAngle = THREE.MathUtils.radToDeg(Math.acos(rawDot));
+  const axisError = Math.abs(90 - rawAngle);
+
+  const yAxis = yRaw.clone().addScaledVector(xAxis, -rawDot);
+  if (yAxis.lengthSq() < 1e-10) {
+    return { valid: false, hitCount, hits, xLength, yLength, axisError, reason: 'X and Y guides are parallel.' };
+  }
+  yAxis.normalize();
+
+  const zAxis = xAxis.clone().cross(yAxis);
+  if (zAxis.lengthSq() < 1e-10) {
+    return { valid: false, hitCount, hits, xLength, yLength, axisError, reason: 'Could not build a 3D axis basis.' };
+  }
+  zAxis.normalize();
+  yAxis.copy(zAxis).cross(xAxis).normalize();
+
+  const basis = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
+  const measuredOrientation = new THREE.Quaternion().setFromRotationMatrix(basis).normalize();
+  const delta = measuredOrientation.clone().invert();
+  const rotationDelta = THREE.MathUtils.radToDeg(
+    2 * Math.acos(THREE.MathUtils.clamp(Math.abs(delta.w), -1, 1)),
+  );
+
+  return {
+    valid: true,
+    hitCount,
+    hits,
+    xLength,
+    yLength,
+    axisError,
+    rotationDelta,
+    delta,
+  };
+}
+
+function applyPrecisionHitClasses(sample) {
+  const hits = sample?.hits || {};
+  [
+    [ui.alignX1, hits.x1],
+    [ui.alignX2, hits.x2],
+    [ui.alignY1, hits.y1],
+    [ui.alignY2, hits.y2],
+  ].forEach(([handle, hit]) => {
+    handle.classList.toggle('miss', !hit);
+    handle.classList.toggle('snapped', Boolean(hit));
+  });
+}
+
+function updatePrecisionSurfaceReadouts(sample, dragging = false) {
+  if (dragging) {
+    ui.alignHitStatus.textContent = 'Release to sample the model surface';
+    ui.alignConfirmButton.disabled = true;
+    return;
+  }
+
+  const hitCount = sample?.hitCount || 0;
+  applyPrecisionHitClasses(sample);
+
+  if (!sample || !sample.valid) {
+    ui.alignXAngle.textContent = sample?.xLength ? formatMeters(sample.xLength * getUnityMetersPerUnit()) : '—';
+    ui.alignYAngle.textContent = sample?.yLength ? formatMeters(sample.yLength * getUnityMetersPerUnit()) : '—';
+    ui.alignCorrection.textContent = '—';
+    ui.alignAxisError.textContent = Number.isFinite(sample?.axisError) ? `${sample.axisError.toFixed(2)}°` : '—';
+    ui.alignAxisError.classList.toggle('warning', Number.isFinite(sample?.axisError) && sample.axisError > 3);
+    ui.alignHitStatus.textContent = sample?.reason || `${hitCount}/4 surface points · move every endpoint onto the model`;
+    ui.alignConfirmButton.disabled = true;
+    return;
+  }
+
+  const metersPerUnit = getUnityMetersPerUnit();
+  ui.alignXAngle.textContent = formatMeters(sample.xLength * metersPerUnit);
+  ui.alignYAngle.textContent = formatMeters(sample.yLength * metersPerUnit);
+  ui.alignCorrection.textContent = `${sample.rotationDelta.toFixed(2)}°`;
+  ui.alignAxisError.textContent = `${sample.axisError.toFixed(2)}°`;
+  ui.alignAxisError.classList.toggle('warning', sample.axisError > 3);
+  ui.alignHitStatus.textContent = `4/4 surface points · X+/Y+ define positive world axes`;
+  ui.alignConfirmButton.disabled = false;
+}
+
+function renderPrecisionAlignGuides(sampleSurface = false, dragging = false) {
   setSvgLine(ui.alignXLine, precisionGuides.x.p1, precisionGuides.x.p2);
   setSvgLine(ui.alignYLine, precisionGuides.y.p1, precisionGuides.y.p2);
   setSvgPoint(ui.alignX1, precisionGuides.x.p1);
@@ -887,18 +991,14 @@ function renderPrecisionAlignGuides() {
   ui.alignYLabel.setAttribute('x', precisionGuides.y.p2.x + 10);
   ui.alignYLabel.setAttribute('y', precisionGuides.y.p2.y - 8);
 
-  const metrics = getPrecisionAlignMetrics();
-  ui.alignXAngle.textContent = `${metrics.xTilt.toFixed(2)}°`;
-  ui.alignYAngle.textContent = `${metrics.yTilt.toFixed(2)}°`;
-  ui.alignCorrection.textContent = `${metrics.correction.toFixed(2)}°`;
-  ui.alignAxisError.textContent = `${metrics.axisError.toFixed(2)}°`;
-  ui.alignAxisError.classList.toggle('warning', metrics.axisError > 3);
-  ui.alignConfirmButton.disabled = !metrics.valid;
+  if (sampleSurface) precisionSurfaceSample = samplePrecisionSurface();
+  updatePrecisionSurfaceReadouts(precisionSurfaceSample, dragging);
 }
 
 function startPrecisionAlign() {
   if (!glbTransformEnabled || !isGlbModel()) return;
   precisionAlignActive = true;
+  precisionSurfaceSample = null;
   precisionAlignAutoRotateWasEnabled = controls.autoRotate;
   controls.autoRotate = false;
   transformControls.detach();
@@ -906,12 +1006,15 @@ function startPrecisionAlign() {
   controls.enabled = false;
   ui.precisionAlignOverlay.hidden = false;
   resetPrecisionAlignGuides();
-  setStatus('Precision Align: place X and Y guides on model directions');
+  precisionSurfaceSample = samplePrecisionSurface();
+  renderPrecisionAlignGuides(false, false);
+  setStatus('Precision Align: place all four X/Y endpoints on the model surface; labeled ends are +X/+Y');
 }
 
 function stopPrecisionAlign(restoreTransform = true) {
   precisionAlignActive = false;
   precisionAlignDrag = null;
+  precisionSurfaceSample = null;
   ui.precisionAlignOverlay.hidden = true;
   controls.enabled = true;
   controls.autoRotate = precisionAlignAutoRotateWasEnabled && ui.autorotateToggle.checked;
@@ -965,25 +1068,31 @@ function updatePrecisionDrag(event) {
     guide[precisionAlignDrag.pointName] = { x: pointer.x, y: pointer.y };
     clampGuidePoint(guide[precisionAlignDrag.pointName], width, height);
   }
-  renderPrecisionAlignGuides();
+
+  precisionSurfaceSample = null;
+  renderPrecisionAlignGuides(false, true);
 }
 
 function endPrecisionDrag(event) {
   if (!precisionAlignDrag || event.pointerId !== precisionAlignDrag.pointerId) return;
   precisionAlignDrag = null;
+  precisionSurfaceSample = samplePrecisionSurface();
+  renderPrecisionAlignGuides(false, false);
 }
 
 function applyPrecisionAlignment() {
   if (!precisionAlignActive || !currentModel) return;
-  const metrics = getPrecisionAlignMetrics();
-  if (!metrics.valid) return;
+  const sample = precisionSurfaceSample?.valid ? precisionSurfaceSample : samplePrecisionSurface();
+  if (!sample.valid) {
+    precisionSurfaceSample = sample;
+    renderPrecisionAlignGuides(false, false);
+    return;
+  }
 
   currentModel.updateWorldMatrix(true, true);
   const beforeCenter = new THREE.Box3().setFromObject(currentModel, true).getCenter(new THREE.Vector3());
-  const viewAxis = camera.getWorldDirection(new THREE.Vector3()).normalize();
-  const delta = new THREE.Quaternion().setFromAxisAngle(viewAxis, THREE.MathUtils.degToRad(metrics.correction));
 
-  currentModel.quaternion.premultiply(delta);
+  currentModel.quaternion.premultiply(sample.delta);
   currentModel.updateMatrixWorld(true);
 
   const afterCenter = new THREE.Box3().setFromObject(currentModel, true).getCenter(new THREE.Vector3());
@@ -996,7 +1105,7 @@ function applyPrecisionAlignment() {
   updateStageFromModel();
   refreshScalePersonAnchor();
   stopPrecisionAlign(true);
-  setStatus(`Precision alignment applied: ${metrics.correction.toFixed(2)}°`);
+  setStatus(`3D axis alignment applied · rotation Δ ${sample.rotationDelta.toFixed(2)}° · axis error ${sample.axisError.toFixed(2)}°`);
 }
 
 function collectGlbExportState() {
