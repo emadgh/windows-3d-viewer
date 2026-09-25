@@ -24,6 +24,47 @@ import { DDSLoader } from 'three/addons/loaders/DDSLoader.js';
 
 const MODEL_EXTENSIONS = new Set(['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply', 'dae', '3mf', '3ds', 'usdz', 'wrl', 'vrml']);
 const DEFAULT_CLAY_COLOR = '#787878';
+const TRANSFORM_PREFS_KEY = 'w3dv.transform.preferences.v1';
+const DEFAULT_TRANSFORM_PREFS = Object.freeze({
+  editEnabled: false,
+  mode: 'translate',
+  space: 'world',
+  pivot: 'bottom',
+  scaleInputMode: 'factor',
+  lockXYZ: true,
+});
+
+function loadTransformPreferences() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(TRANSFORM_PREFS_KEY) || '{}');
+    return {
+      editEnabled: Boolean(stored.editEnabled),
+      mode: ['translate', 'rotate', 'scale'].includes(stored.mode) ? stored.mode : DEFAULT_TRANSFORM_PREFS.mode,
+      space: ['local', 'world'].includes(stored.space) ? stored.space : DEFAULT_TRANSFORM_PREFS.space,
+      pivot: ['center', 'object', 'bottom'].includes(stored.pivot) ? stored.pivot : DEFAULT_TRANSFORM_PREFS.pivot,
+      scaleInputMode: ['factor', 'bounds'].includes(stored.scaleInputMode) ? stored.scaleInputMode : DEFAULT_TRANSFORM_PREFS.scaleInputMode,
+      lockXYZ: stored.lockXYZ === undefined ? DEFAULT_TRANSFORM_PREFS.lockXYZ : Boolean(stored.lockXYZ),
+    };
+  } catch (error) {
+    console.warn('Could not load transform preferences.', error);
+    return { ...DEFAULT_TRANSFORM_PREFS };
+  }
+}
+
+let transformPreferences = loadTransformPreferences();
+
+function saveTransformPreferences() {
+  try {
+    localStorage.setItem(TRANSFORM_PREFS_KEY, JSON.stringify(transformPreferences));
+  } catch (error) {
+    console.warn('Could not save transform preferences.', error);
+  }
+}
+
+function updateTransformPreference(key, value) {
+  transformPreferences = { ...transformPreferences, [key]: value };
+  saveTransformPreferences();
+}
 const modeLabels = {
   'textured-lighting': 'Textured + Lighting',
   textured: 'Textured',
@@ -260,6 +301,9 @@ let lightingEnabled = true;
 let shadowsEnabled = true;
 let wireOverlayEnabled = false;
 let loadSessionSerial = 0;
+let activeModelSessionId = 0;
+let saveTargetSessionId = 0;
+let nativeSourceSessionId = 0;
 let pendingLoadSession = null;
 let currentAssetSession = null;
 let isolationTarget = null;
@@ -394,21 +438,34 @@ function findPrimaryFile(files) {
   return files.find((file) => MODEL_EXTENSIONS.has(getExtension(file.name))) || null;
 }
 
-async function refreshNativeGlbSourceState() {
-  if (getExtension(currentFileName) !== 'glb' || !window.zero?.invoke) {
+async function refreshNativeGlbSourceState(expectedSessionId = activeModelSessionId) {
+  if (expectedSessionId !== activeModelSessionId || getExtension(currentFileName) !== 'glb' || !window.zero?.invoke) {
     currentGlbNativeSource = false;
+    if (saveTargetSessionId === expectedSessionId) saveTargetSessionId = 0;
     return false;
   }
 
   try {
     const source = await window.zero.invoke('app.getActiveSource', {});
-    currentGlbNativeSource = Boolean(source?.available);
+    const sourceName = String(source?.name || '');
+    const matchesCurrentFile = Boolean(source?.available && sourceName && sourceName === currentFileName);
+    currentGlbNativeSource = matchesCurrentFile;
+    if (matchesCurrentFile) saveTargetSessionId = expectedSessionId;
+    else if (saveTargetSessionId === expectedSessionId) saveTargetSessionId = 0;
     return currentGlbNativeSource;
   } catch (error) {
     console.warn('Could not query native GLB source path.', error);
     currentGlbNativeSource = false;
+    if (saveTargetSessionId === expectedSessionId) saveTargetSessionId = 0;
     return false;
   }
+}
+
+function invalidateCurrentSaveTarget() {
+  currentGlbSaveHandle = null;
+  currentGlbNativeSource = false;
+  saveTargetSessionId = 0;
+  nativeSourceSessionId = 0;
 }
 
 async function loadFiles(fileList, options = {}) {
@@ -422,15 +479,21 @@ async function loadFiles(fileList, options = {}) {
   }
 
   if (pendingLoadSession) pendingLoadSession.cancelled = true;
+
+  invalidateCurrentSaveTarget();
+  const modelSessionId = ++activeModelSessionId;
   clearCurrentModel();
 
   const session = createLoadSession(files);
+  session.modelSessionId = modelSessionId;
   pendingLoadSession = session;
 
   currentGlbSaveHandle = options.saveHandle && getExtension(primary.name) === 'glb'
     ? options.saveHandle
     : null;
   currentGlbNativeSource = Boolean(options.nativeSource && getExtension(primary.name) === 'glb');
+  nativeSourceSessionId = currentGlbNativeSource ? modelSessionId : 0;
+  if (currentGlbSaveHandle || currentGlbNativeSource) saveTargetSessionId = modelSessionId;
   if (!options.nativeSource && window.zero?.invoke) {
     try {
       await window.zero.invoke('app.clearActiveSource', {});
@@ -440,8 +503,8 @@ async function loadFiles(fileList, options = {}) {
   }
 
   currentFileName = primary.name;
-  if (!currentGlbSaveHandle && getExtension(primary.name) === 'glb') {
-    await refreshNativeGlbSourceState();
+  if (!currentGlbSaveHandle && nativeSourceSessionId === modelSessionId) {
+    await refreshNativeGlbSourceState(modelSessionId);
   }
   ui.modelName.textContent = primary.name;
   ui.formatText.textContent = getExtension(primary.name).toUpperCase();
@@ -454,7 +517,7 @@ async function loadFiles(fileList, options = {}) {
       : null;
     const result = await loadModel(primary, files, session);
 
-    if (pendingLoadSession !== session || session.cancelled) {
+    if (pendingLoadSession !== session || session.cancelled || activeModelSessionId !== modelSessionId) {
       if (result?.object) disposeModelResources(result.object);
       disposeAssetSession(session);
       return;
@@ -485,7 +548,7 @@ async function loadFiles(fileList, options = {}) {
       setStatus(`${primary.name} loaded`);
     }
   } catch (error) {
-    if (pendingLoadSession !== session || session.cancelled) {
+    if (pendingLoadSession !== session || session.cancelled || activeModelSessionId !== modelSessionId) {
       disposeAssetSession(session);
       return;
     }
@@ -505,6 +568,7 @@ async function openWithFileSystemPicker() {
     try {
       const result = await window.zero.invoke('app.pickModelFile', {});
       if (!result?.selected) return;
+      window.__w3dvBeginOpenTransition?.();
       await window.__w3dvOpenNativeLaunchFile();
       return;
     } catch (error) {
@@ -545,6 +609,13 @@ async function openWithFileSystemPicker() {
     }
   }
 }
+
+window.__w3dvBeginOpenTransition = () => {
+  if (pendingLoadSession) pendingLoadSession.cancelled = true;
+  activeModelSessionId += 1;
+  invalidateCurrentSaveTarget();
+  updateGlbTransformState();
+};
 
 // The native launch bridge calls this directly for Explorer/open-with files.
 // Keeping the loader independent from the hidden file input avoids WebView2
@@ -722,7 +793,7 @@ function clearCurrentModel() {
   if (precisionAlignActive) stopPrecisionAlign(false);
   scalePersonAnchor = null;
   scalePersonSprite.visible = false;
-  setGlbTransformEnabled(false);
+  setGlbTransformEnabled(false, false);
   ui.transformPanel.hidden = true;
   originalGlbTransform = null;
   clearIsolation();
@@ -996,18 +1067,27 @@ function finishTransformProxyDrag() {
   syncTransformPivotProxy();
 }
 
-function setTransformPivotMode(mode) {
+function setTransformPivotMode(mode, persist = true) {
   transformPivotMode = ['center', 'object', 'bottom'].includes(mode) ? mode : 'center';
   if (ui.transformPivot) ui.transformPivot.value = transformPivotMode;
+  if (persist) updateTransformPreference('pivot', transformPivotMode);
   if (glbTransformEnabled) syncTransformPivotProxy();
 }
 
-function setUnifiedScaleEnabled(enabled) {
+function setTransformSpace(space, persist = true) {
+  const nextSpace = space === 'local' ? 'local' : 'world';
+  if (ui.transformSpace) ui.transformSpace.value = nextSpace;
+  if (persist) updateTransformPreference('space', nextSpace);
+  if (glbTransformEnabled) syncTransformPivotProxy();
+}
+
+function setUnifiedScaleEnabled(enabled, persist = true) {
   unifiedScaleEnabled = Boolean(enabled);
   if (ui.unifiedScaleToggle) {
     ui.unifiedScaleToggle.checked = unifiedScaleEnabled;
     ui.unifiedScaleToggle.closest('.scale-lock-toggle')?.classList.toggle('active', unifiedScaleEnabled);
   }
+  if (persist) updateTransformPreference('lockXYZ', unifiedScaleEnabled);
 }
 
 function getCurrentBoundsSizeMeters() {
@@ -1019,7 +1099,7 @@ function getCurrentBoundsSizeMeters() {
   return box.getSize(new THREE.Vector3()).multiplyScalar(metersPerUnit);
 }
 
-function setScaleInputMode(mode) {
+function setScaleInputMode(mode, persist = true) {
   scaleInputMode = mode === 'bounds' ? 'bounds' : 'factor';
   if (ui.scaleInputMode) ui.scaleInputMode.value = scaleInputMode;
   if (ui.scaleInputDescription) {
@@ -1027,6 +1107,7 @@ function setScaleInputMode(mode) {
       ? 'Bounding box size in meters · X width / Y height / Z depth'
       : 'X / Y / Z scale factor';
   }
+  if (persist) updateTransformPreference('scaleInputMode', scaleInputMode);
   updateTransformFields();
 }
 
@@ -1089,7 +1170,7 @@ function configureGlbTransformTools() {
   ui.transformPanel.hidden = !available;
 
   if (!available) {
-    setGlbTransformEnabled(false);
+    setGlbTransformEnabled(false, false);
     originalGlbTransform = null;
     return;
   }
@@ -1100,23 +1181,21 @@ function configureGlbTransformTools() {
     scale: currentModel.scale.clone(),
   };
 
-  ui.transformEnabled.checked = false;
-  ui.transformSpace.value = 'world';
-  ui.transformPivot.value = 'bottom';
-  transformPivotMode = 'bottom';
-  setUnifiedScaleEnabled(true);
-  setScaleInputMode('factor');
-  transformControls.setMode('translate');
-  transformControls.setSpace('world');
-  setTransformModeButtonState('translate');
-  setGlbTransformEnabled(false);
+  setTransformSpace(transformPreferences.space, false);
+  setTransformPivotMode(transformPreferences.pivot, false);
+  setUnifiedScaleEnabled(transformPreferences.lockXYZ, false);
+  setScaleInputMode(transformPreferences.scaleInputMode, false);
+  transformControls.setMode(transformPreferences.mode);
+  setTransformModeButtonState(transformPreferences.mode);
+  setGlbTransformEnabled(transformPreferences.editEnabled, false);
   updateTransformFields();
   updateGlbTransformState();
 }
 
-function setGlbTransformEnabled(enabled) {
+function setGlbTransformEnabled(enabled, persist = true) {
   glbTransformEnabled = Boolean(enabled && isGlbModel());
   ui.transformEnabled.checked = glbTransformEnabled;
+  if (persist) updateTransformPreference('editEnabled', Boolean(enabled));
   if (!glbTransformEnabled && precisionAlignActive) stopPrecisionAlign(false);
 
   if (glbTransformEnabled) {
@@ -1151,10 +1230,11 @@ function setTransformModeButtonState(mode) {
   }
 }
 
-function setTransformMode(mode) {
-  if (!glbTransformEnabled || !['translate', 'rotate', 'scale'].includes(mode)) return;
+function setTransformMode(mode, persist = true) {
+  if (!['translate', 'rotate', 'scale'].includes(mode) || !isGlbModel()) return;
   transformControls.setMode(mode);
-  syncTransformPivotProxy();
+  if (persist) updateTransformPreference('mode', mode);
+  if (glbTransformEnabled) syncTransformPivotProxy();
   setTransformModeButtonState(mode);
 }
 
@@ -1209,7 +1289,8 @@ function updateGlbTransformState() {
 
   const isGlb = isGlbModel();
   const busy = glbExportInProgress;
-  const hasOverwriteTarget = Boolean(currentGlbSaveHandle || currentGlbNativeSource);
+  const hasOverwriteTarget = saveTargetSessionId === activeModelSessionId
+    && Boolean(currentGlbSaveHandle || currentGlbNativeSource);
 
   ui.saveButton.disabled = !isGlb || busy || !hasOverwriteTarget;
   ui.saveAsButton.disabled = !isGlb || busy;
@@ -1757,11 +1838,25 @@ async function runGlbSave(statusText, operation) {
 async function saveCurrentGlb() {
   if (!isGlbModel() || glbExportInProgress) return;
 
-  if (!currentGlbSaveHandle && !currentGlbNativeSource) {
-    await refreshNativeGlbSourceState();
+  const sessionId = activeModelSessionId;
+  if (saveTargetSessionId !== sessionId) {
+    currentGlbSaveHandle = null;
+    currentGlbNativeSource = false;
   }
 
-  if (!currentGlbSaveHandle && !currentGlbNativeSource) {
+  if (
+    !currentGlbSaveHandle
+    && !currentGlbNativeSource
+    && nativeSourceSessionId === sessionId
+  ) {
+    await refreshNativeGlbSourceState(sessionId);
+  }
+
+  if (
+    sessionId !== activeModelSessionId
+    || saveTargetSessionId !== sessionId
+    || (!currentGlbSaveHandle && !currentGlbNativeSource)
+  ) {
     setStatus('Save cannot overwrite this file because no writable source path is available. Use Save As once.', true);
     return;
   }
@@ -1776,6 +1871,10 @@ async function saveCurrentGlb() {
   await runGlbSave('Saving GLB…', async () => {
     const buffer = await createCurrentGlbBuffer();
     const blob = new Blob([buffer], { type: 'model/gltf-binary' });
+
+    if (sessionId !== activeModelSessionId || saveTargetSessionId !== sessionId) {
+      throw new Error('The active model changed before Save completed.');
+    }
 
     if (currentGlbSaveHandle) {
       await writeBlobToHandle(currentGlbSaveHandle, blob);
@@ -1794,6 +1893,7 @@ async function saveCurrentGlb() {
 async function saveAsCurrentGlb() {
   if (!isGlbModel() || glbExportInProgress) return;
 
+  const sessionId = activeModelSessionId;
   const base = currentFileName.replace(/\.glb$/i, '') || 'model';
   const suggestedName = `${base}-edited.glb`;
 
@@ -1805,14 +1905,25 @@ async function saveAsCurrentGlb() {
     return;
   }
 
+  if (sessionId !== activeModelSessionId || !isGlbModel()) {
+    setStatus('Save As cancelled because the active model changed.', true);
+    return;
+  }
+
   await runGlbSave('Saving GLB as…', async () => {
     const buffer = await createCurrentGlbBuffer();
     const blob = new Blob([buffer], { type: 'model/gltf-binary' });
+
+    if (sessionId !== activeModelSessionId) {
+      throw new Error('The active model changed before Save As completed.');
+    }
 
     if (target?.handle) {
       await writeBlobToHandle(target.handle, blob);
       currentGlbSaveHandle = target.handle;
       currentGlbNativeSource = false;
+      nativeSourceSessionId = 0;
+      saveTargetSessionId = sessionId;
       if (window.zero?.invoke) {
         try {
           await window.zero.invoke('app.clearActiveSource', {});
@@ -2330,10 +2441,7 @@ ui.transformEnabled.addEventListener('change', () => setGlbTransformEnabled(ui.t
 ui.transformModeButtons.forEach((button) => {
   button.addEventListener('click', () => setTransformMode(button.dataset.transformMode));
 });
-ui.transformSpace.addEventListener('change', () => {
-  if (!glbTransformEnabled) return;
-  syncTransformPivotProxy();
-});
+ui.transformSpace.addEventListener('change', () => setTransformSpace(ui.transformSpace.value));
 ui.transformPivot.addEventListener('change', () => setTransformPivotMode(ui.transformPivot.value));
 ui.scaleInputMode.addEventListener('change', () => setScaleInputMode(ui.scaleInputMode.value));
 ui.unifiedScaleToggle.addEventListener('change', () => setUnifiedScaleEnabled(ui.unifiedScaleToggle.checked));
@@ -2444,8 +2552,7 @@ window.addEventListener('keydown', (event) => {
   else if (key === 'p') setScalePersonVisible(!scalePersonVisible);
   else if (key === 'c') takeScreenshot();
   else if (key === 'q' && glbTransformEnabled) {
-    ui.transformSpace.value = ui.transformSpace.value === 'local' ? 'world' : 'local';
-    syncTransformPivotProxy();
+    setTransformSpace(ui.transformSpace.value === 'local' ? 'world' : 'local');
   } else if (key === 'u' && glbTransformEnabled) {
     setUnifiedScaleEnabled(!unifiedScaleEnabled);
   } else if (key === 'g' && glbTransformEnabled) {
