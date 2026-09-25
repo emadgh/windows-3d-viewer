@@ -364,7 +364,9 @@ async function loadFiles(fileList, options = {}) {
   }
 
   clearCurrentModel();
-  currentGlbSaveHandle = null;
+  currentGlbSaveHandle = options.saveHandle && getExtension(primary.name) === 'glb'
+    ? options.saveHandle
+    : null;
   currentGlbNativeSource = Boolean(options.nativeSource && getExtension(primary.name) === 'glb');
   if (!options.nativeSource && window.zero?.invoke) {
     try {
@@ -391,6 +393,41 @@ async function loadFiles(fileList, options = {}) {
     ui.emptyState.hidden = false;
     ui.modelName.textContent = 'No model loaded';
     ui.formatText.textContent = 'Load failed';
+  }
+}
+
+async function openWithFileSystemPicker() {
+  if (typeof window.showOpenFilePicker !== 'function') {
+    ui.fileInput.click();
+    return;
+  }
+
+  try {
+    const handles = await window.showOpenFilePicker({
+      multiple: true,
+      types: [{
+        description: '3D models and related files',
+        accept: {
+          'application/octet-stream': [
+            '.glb', '.gltf', '.fbx', '.obj', '.mtl', '.stl', '.ply', '.dae',
+            '.3mf', '.3ds', '.usdz', '.wrl', '.vrml', '.bin', '.tga', '.dds', '.ktx2',
+          ],
+          'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.bmp'],
+        },
+      }],
+    });
+    const files = await Promise.all(handles.map((handle) => handle.getFile()));
+    const primary = findPrimaryFile(files);
+    const primaryIndex = primary ? files.indexOf(primary) : -1;
+    const saveHandle = primaryIndex >= 0 && getExtension(primary.name) === 'glb'
+      ? handles[primaryIndex]
+      : null;
+    await loadFiles(files, { saveHandle });
+  } catch (error) {
+    if (error?.name !== 'AbortError') {
+      console.warn('System file picker failed; using the fallback picker.', error);
+      ui.fileInput.click();
+    }
   }
 }
 
@@ -1939,8 +1976,8 @@ function animate() {
 }
 animate();
 
-ui.openButton.addEventListener('click', () => ui.fileInput.click());
-ui.emptyOpenButton.addEventListener('click', () => ui.fileInput.click());
+ui.openButton.addEventListener('click', openWithFileSystemPicker);
+ui.emptyOpenButton.addEventListener('click', openWithFileSystemPicker);
 ui.fileInput.addEventListener('change', async () => {
   await loadFiles(ui.fileInput.files);
   ui.fileInput.value = '';
@@ -2046,7 +2083,7 @@ window.addEventListener('keydown', (event) => {
   if ((event.ctrlKey || event.metaKey) && !event.altKey) {
     if (event.key.toLowerCase() === 'o') {
       event.preventDefault();
-      ui.fileInput.click();
+      openWithFileSystemPicker();
     } else if (event.key.toLowerCase() === 's') {
       event.preventDefault();
       if (isGlbModel()) {
