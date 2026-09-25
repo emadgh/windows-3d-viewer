@@ -71,7 +71,8 @@ const ui = {
   transformScaleY: document.querySelector('#transformScaleY'),
   transformScaleZ: document.querySelector('#transformScaleZ'),
   resetTransformButton: document.querySelector('#resetTransformButton'),
-  saveGlbButton: document.querySelector('#saveGlbButton'),
+  saveButton: document.querySelector('#saveButton'),
+  saveAsButton: document.querySelector('#saveAsButton'),
   transformState: document.querySelector('#transformState'),
   precisionAlignButton: document.querySelector('#precisionAlignButton'),
   precisionAlignOverlay: document.querySelector('#precisionAlignOverlay'),
@@ -269,6 +270,8 @@ let originalGlbTransform = null;
 let transformPivotMode = 'center';
 let unifiedScaleEnabled = false;
 let glbExportInProgress = false;
+let currentGlbSaveHandle = null;
+let currentGlbNativeSource = false;
 let scalePersonVisible = true;
 let scalePersonAnchor = null;
 let precisionAlignActive = false;
@@ -350,7 +353,7 @@ function findPrimaryFile(files) {
   return files.find((file) => MODEL_EXTENSIONS.has(getExtension(file.name))) || null;
 }
 
-async function loadFiles(fileList) {
+async function loadFiles(fileList, options = {}) {
   const files = Array.from(fileList || []);
   if (!files.length) return;
 
@@ -361,6 +364,17 @@ async function loadFiles(fileList) {
   }
 
   clearCurrentModel();
+  currentGlbSaveHandle = options.saveHandle && getExtension(primary.name) === 'glb'
+    ? options.saveHandle
+    : null;
+  currentGlbNativeSource = Boolean(options.nativeSource && getExtension(primary.name) === 'glb');
+  if (!options.nativeSource && window.zero?.invoke) {
+    try {
+      await window.zero.invoke('app.clearActiveSource', {});
+    } catch (error) {
+      console.warn('Could not clear native save target.', error);
+    }
+  }
   prepareLocalAssets(files);
   currentFileName = primary.name;
   ui.modelName.textContent = primary.name;
@@ -379,6 +393,41 @@ async function loadFiles(fileList) {
     ui.emptyState.hidden = false;
     ui.modelName.textContent = 'No model loaded';
     ui.formatText.textContent = 'Load failed';
+  }
+}
+
+async function openWithFileSystemPicker() {
+  if (typeof window.showOpenFilePicker !== 'function') {
+    ui.fileInput.click();
+    return;
+  }
+
+  try {
+    const handles = await window.showOpenFilePicker({
+      multiple: true,
+      types: [{
+        description: '3D models and related files',
+        accept: {
+          'application/octet-stream': [
+            '.glb', '.gltf', '.fbx', '.obj', '.mtl', '.stl', '.ply', '.dae',
+            '.3mf', '.3ds', '.usdz', '.wrl', '.vrml', '.bin', '.tga', '.dds', '.ktx2',
+            '.png', '.jpg', '.jpeg', '.webp', '.bmp',
+          ],
+        },
+      }],
+    });
+    const files = await Promise.all(handles.map((handle) => handle.getFile()));
+    const primary = findPrimaryFile(files);
+    const primaryIndex = primary ? files.indexOf(primary) : -1;
+    const saveHandle = primaryIndex >= 0 && getExtension(primary.name) === 'glb'
+      ? handles[primaryIndex]
+      : null;
+    await loadFiles(files, { saveHandle });
+  } catch (error) {
+    if (error?.name !== 'AbortError') {
+      console.warn('System file picker failed; using the fallback picker.', error);
+      ui.fileInput.click();
+    }
   }
 }
 
@@ -544,6 +593,8 @@ function clearCurrentModel() {
   ui.triangleCount.textContent = '—';
   ui.animationCount.textContent = '—';
   renderer.renderLists.dispose();
+  ui.saveButton.disabled = true;
+  ui.saveAsButton.disabled = true;
 }
 
 function disposeModelResources(root) {
@@ -880,11 +931,13 @@ function hasGlbTransformChanged() {
 }
 
 function updateGlbTransformState() {
-  if (!ui.transformState || !ui.saveGlbButton) return;
+  if (!ui.transformState || !ui.saveButton || !ui.saveAsButton) return;
   const changed = hasGlbTransformChanged();
   ui.transformState.textContent = changed ? 'Modified' : 'Original';
   ui.transformState.classList.toggle('modified', changed);
-  ui.saveGlbButton.disabled = !isGlbModel() || glbExportInProgress;
+  const disabled = !isGlbModel() || glbExportInProgress;
+  ui.saveButton.disabled = disabled;
+  ui.saveAsButton.disabled = disabled;
 }
 
 function applyTransformFields(changedInput = null) {
@@ -1290,47 +1343,7 @@ function restoreGlbExportState(state) {
   updateWireOverlays();
 }
 
-async function saveBlobWithPicker(blob, suggestedName) {
-  if (typeof window.showSaveFilePicker === 'function') {
-    try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName,
-        types: [{
-          description: 'Binary glTF',
-          accept: { 'model/gltf-binary': ['.glb'] },
-        }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return true;
-    } catch (error) {
-      if (error?.name === 'AbortError') return false;
-      console.warn('Native save picker failed, falling back to browser download.', error);
-    }
-  }
-
-  const url = URL.createObjectURL(blob);
-  try {
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = suggestedName;
-    link.click();
-    return true;
-  } finally {
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-}
-
-async function exportCurrentGlb() {
-  if (!isGlbModel() || glbExportInProgress) return;
-
-  glbExportInProgress = true;
-  const previousButtonText = ui.saveGlbButton.textContent;
-  ui.saveGlbButton.disabled = true;
-  ui.saveGlbButton.textContent = 'Exporting…';
-  setStatus('Exporting GLB…');
-
+async function createCurrentGlbBuffer() {
   let exportState = null;
   try {
     exportState = collectGlbExportState();
@@ -1343,29 +1356,182 @@ async function exportCurrentGlb() {
       onlyVisible: false,
       animations: currentAnimations,
     });
-
     if (!(result instanceof ArrayBuffer)) throw new Error('GLB exporter did not return binary data.');
-
-    const blob = new Blob([result], { type: 'model/gltf-binary' });
-    const base = currentFileName.replace(/\.glb$/i, '') || 'model';
-    const outputName = `${base}-edited.glb`;
-    const saved = await saveBlobWithPicker(blob, outputName);
-
-    if (saved) {
-      setStatus(`${outputName} exported`);
-    } else {
-      setStatus('GLB export cancelled');
-    }
-  } catch (error) {
-    console.error('GLB export failed', error);
-    setStatus(`GLB export failed: ${error?.message || error}`, true);
+    return result;
   } finally {
     if (exportState) restoreGlbExportState(exportState);
+  }
+}
+
+function markCurrentGlbSaved(fileName = null) {
+  if (!isGlbModel()) return;
+  originalGlbTransform = {
+    position: currentModel.position.clone(),
+    quaternion: currentModel.quaternion.clone(),
+    scale: currentModel.scale.clone(),
+  };
+  if (fileName) {
+    currentFileName = fileName;
+    ui.modelName.textContent = fileName;
+  }
+  updateGlbTransformState();
+}
+
+async function writeBlobToHandle(handle, blob) {
+  const writable = await handle.createWritable();
+  try {
+    await writable.write(blob);
+  } finally {
+    await writable.close();
+  }
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    link.click();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
+async function requestGlbSaveHandle(suggestedName) {
+  if (typeof window.showSaveFilePicker !== 'function') return { handle: null, fallback: true };
+  try {
+    const handle = await window.showSaveFilePicker({
+      suggestedName,
+      types: [{
+        description: 'Binary glTF',
+        accept: { 'model/gltf-binary': ['.glb'] },
+      }],
+    });
+    return { handle, fallback: false };
+  } catch (error) {
+    if (error?.name === 'AbortError') return { cancelled: true };
+    console.warn('Save picker failed, falling back to browser download.', error);
+    return { handle: null, fallback: true };
+  }
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const block = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += block) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(bytes.length, offset + block)));
+  }
+  return btoa(binary);
+}
+
+async function overwriteNativeActiveSource(buffer) {
+  if (!window.zero?.invoke) throw new Error('Native save bridge is unavailable.');
+  await window.zero.invoke('app.beginActiveSourceSave', {});
+  try {
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 256 * 1024;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const chunk = bytes.subarray(offset, Math.min(bytes.length, offset + chunkSize));
+      await window.zero.invoke('app.writeActiveSourceSaveChunk', {
+        offset,
+        data: bytesToBase64(chunk),
+      });
+    }
+    return await window.zero.invoke('app.finishActiveSourceSave', {});
+  } catch (error) {
+    try {
+      await window.zero.invoke('app.cancelActiveSourceSave', {});
+    } catch {
+      // Best effort cleanup.
+    }
+    throw error;
+  }
+}
+
+async function runGlbSave(statusText, operation) {
+  if (!isGlbModel() || glbExportInProgress) return false;
+  glbExportInProgress = true;
+  updateGlbTransformState();
+  setStatus(statusText);
+  try {
+    return await operation();
+  } catch (error) {
+    console.error('GLB save failed', error);
+    setStatus(`GLB save failed: ${error?.message || error}`, true);
+    return false;
+  } finally {
     glbExportInProgress = false;
-    ui.saveGlbButton.textContent = previousButtonText;
     updateGlbTransformState();
     updateBoundsMeasurement();
   }
+}
+
+async function saveCurrentGlb() {
+  if (!isGlbModel() || glbExportInProgress) return;
+
+  if (!currentGlbSaveHandle && !currentGlbNativeSource) {
+    await saveAsCurrentGlb();
+    return;
+  }
+
+  await runGlbSave('Saving GLB…', async () => {
+    const buffer = await createCurrentGlbBuffer();
+    const blob = new Blob([buffer], { type: 'model/gltf-binary' });
+
+    if (currentGlbSaveHandle) {
+      await writeBlobToHandle(currentGlbSaveHandle, blob);
+      markCurrentGlbSaved(currentGlbSaveHandle.name || currentFileName);
+      setStatus(`${currentGlbSaveHandle.name || currentFileName} saved`);
+      return true;
+    }
+
+    const result = await overwriteNativeActiveSource(buffer);
+    markCurrentGlbSaved();
+    setStatus(`${result?.name || currentFileName} saved`);
+    return true;
+  });
+}
+
+async function saveAsCurrentGlb() {
+  if (!isGlbModel() || glbExportInProgress) return;
+
+  const base = currentFileName.replace(/\.glb$/i, '') || 'model';
+  const suggestedName = `${base}-edited.glb`;
+
+  // Request the handle before exporting so the browser still has the user's
+  // transient activation from the navbar click / Ctrl+Shift+S shortcut.
+  const target = await requestGlbSaveHandle(suggestedName);
+  if (target?.cancelled) {
+    setStatus('Save As cancelled');
+    return;
+  }
+
+  await runGlbSave('Saving GLB as…', async () => {
+    const buffer = await createCurrentGlbBuffer();
+    const blob = new Blob([buffer], { type: 'model/gltf-binary' });
+
+    if (target?.handle) {
+      await writeBlobToHandle(target.handle, blob);
+      currentGlbSaveHandle = target.handle;
+      currentGlbNativeSource = false;
+      if (window.zero?.invoke) {
+        try {
+          await window.zero.invoke('app.clearActiveSource', {});
+        } catch (error) {
+          console.warn('Could not clear previous native save target.', error);
+        }
+      }
+      const savedName = target.handle.name || suggestedName;
+      markCurrentGlbSaved(savedName);
+      setStatus(`${savedName} saved`);
+      return true;
+    }
+
+    downloadBlob(blob, suggestedName);
+    setStatus(`${suggestedName} exported`);
+    return true;
+  });
 }
 
 function getUnityMetersPerUnit() {
@@ -1810,8 +1976,8 @@ function animate() {
 }
 animate();
 
-ui.openButton.addEventListener('click', () => ui.fileInput.click());
-ui.emptyOpenButton.addEventListener('click', () => ui.fileInput.click());
+ui.openButton.addEventListener('click', openWithFileSystemPicker);
+ui.emptyOpenButton.addEventListener('click', openWithFileSystemPicker);
 ui.fileInput.addEventListener('change', async () => {
   await loadFiles(ui.fileInput.files);
   ui.fileInput.value = '';
@@ -1860,7 +2026,8 @@ ui.unifiedScaleToggle.addEventListener('change', () => setUnifiedScaleEnabled(ui
   input.addEventListener('change', () => applyTransformFields(input));
 });
 ui.resetTransformButton.addEventListener('click', resetGlbTransform);
-ui.saveGlbButton.addEventListener('click', exportCurrentGlb);
+ui.saveButton.addEventListener('click', saveCurrentGlb);
+ui.saveAsButton.addEventListener('click', saveAsCurrentGlb);
 ui.precisionAlignButton.addEventListener('click', startPrecisionAlign);
 ui.alignResetButton.addEventListener('click', resetPrecisionAlignGuides);
 ui.alignCancelButton.addEventListener('click', () => stopPrecisionAlign(true));
@@ -1916,10 +2083,13 @@ window.addEventListener('keydown', (event) => {
   if ((event.ctrlKey || event.metaKey) && !event.altKey) {
     if (event.key.toLowerCase() === 'o') {
       event.preventDefault();
-      ui.fileInput.click();
+      openWithFileSystemPicker();
     } else if (event.key.toLowerCase() === 's') {
       event.preventDefault();
-      if (isGlbModel()) exportCurrentGlb();
+      if (isGlbModel()) {
+        if (event.shiftKey) saveAsCurrentGlb();
+        else saveCurrentGlb();
+      }
     }
     return;
   }

@@ -24,6 +24,14 @@
           <span>Open</span>
         </button>
         <input id="fileInput" type="file" hidden multiple accept=".glb,.gltf,.fbx,.obj,.mtl,.stl,.ply,.dae,.3mf,.3ds,.usdz,.wrl,.vrml,.bin,.png,.jpg,.jpeg,.webp,.bmp,.tga,.dds,.ktx2" />
+        <button id="saveButton" class="toolbar-button icon-text-button" title="Save GLB · Ctrl+S" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5V3Zm2 2v5h9V5H7Zm0 7v7h10v-7H7Zm2-6h5v2H9V6Z"/></svg>
+          <span>Save</span>
+        </button>
+        <button id="saveAsButton" class="toolbar-button icon-text-button" title="Save As GLB · Ctrl+Shift+S" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h11l3 3v6h-2V7.2L13.8 5H6v14h5v2H4V3Zm4 3h5v4H8V6Zm8.5 7 4.5 4.5-4.5 4.5-1.4-1.4 2.1-2.1H12v-2h5.2l-2.1-2.1 1.4-1.4Z"/></svg>
+          <span>Save As</span>
+        </button>
         <button id="fitButton" class="toolbar-button icon-text-button" title="Fit model in view">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5v2H6v3H4Zm11-5h5v5h-2V6h-3V4ZM6 15v3h3v2H4v-5h2Zm12 0h2v5h-5v-2h3v-3ZM8 8h8v8H8V8Zm2 2v4h4v-4h-4Z"/></svg>
           <span>Fit</span>
@@ -236,7 +244,6 @@
 
             <div class="transform-actions">
               <button id="resetTransformButton" type="button" class="transform-reset" disabled>Reset transform</button>
-              <button id="saveGlbButton" type="button" class="primary transform-save">Save As GLB</button>
             </div>
             <div class="transform-footer">
               <span>Source state</span>
@@ -271,7 +278,8 @@
           <section class="panel help-panel">
             <div class="panel-title"><span>Shortcuts</span><span class="panel-accent"></span></div>
             <div class="help-row"><span>Open</span><kbd>Ctrl+O</kbd></div>
-            <div class="help-row"><span>Save GLB</span><kbd>Ctrl+S</kbd></div>
+            <div class="help-row"><span>Save</span><kbd>Ctrl+S</kbd></div>
+            <div class="help-row"><span>Save As</span><kbd>Ctrl+Shift+S</kbd></div>
             <div class="help-row"><span>View mode</span><kbd>V</kbd></div>
             <div class="help-row"><span>Fit</span><kbd>F</kbd></div>
             <div class="help-row"><span>Edit mode</span><kbd>Tab</kbd></div>
