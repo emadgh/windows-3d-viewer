@@ -765,7 +765,7 @@ function clearCurrentModel() {
   if (precisionAlignActive) stopPrecisionAlign(false);
   scalePersonAnchor = null;
   scalePersonSprite.visible = false;
-  setGlbTransformEnabled(false);
+  setGlbTransformEnabled(false, false);
   ui.transformPanel.hidden = true;
   originalGlbTransform = null;
   clearIsolation();
@@ -1039,18 +1039,27 @@ function finishTransformProxyDrag() {
   syncTransformPivotProxy();
 }
 
-function setTransformPivotMode(mode) {
+function setTransformPivotMode(mode, persist = true) {
   transformPivotMode = ['center', 'object', 'bottom'].includes(mode) ? mode : 'center';
   if (ui.transformPivot) ui.transformPivot.value = transformPivotMode;
+  if (persist) updateTransformPreference('pivot', transformPivotMode);
   if (glbTransformEnabled) syncTransformPivotProxy();
 }
 
-function setUnifiedScaleEnabled(enabled) {
+function setTransformSpace(space, persist = true) {
+  const nextSpace = space === 'local' ? 'local' : 'world';
+  if (ui.transformSpace) ui.transformSpace.value = nextSpace;
+  if (persist) updateTransformPreference('space', nextSpace);
+  if (glbTransformEnabled) syncTransformPivotProxy();
+}
+
+function setUnifiedScaleEnabled(enabled, persist = true) {
   unifiedScaleEnabled = Boolean(enabled);
   if (ui.unifiedScaleToggle) {
     ui.unifiedScaleToggle.checked = unifiedScaleEnabled;
     ui.unifiedScaleToggle.closest('.scale-lock-toggle')?.classList.toggle('active', unifiedScaleEnabled);
   }
+  if (persist) updateTransformPreference('lockXYZ', unifiedScaleEnabled);
 }
 
 function getCurrentBoundsSizeMeters() {
@@ -1062,7 +1071,7 @@ function getCurrentBoundsSizeMeters() {
   return box.getSize(new THREE.Vector3()).multiplyScalar(metersPerUnit);
 }
 
-function setScaleInputMode(mode) {
+function setScaleInputMode(mode, persist = true) {
   scaleInputMode = mode === 'bounds' ? 'bounds' : 'factor';
   if (ui.scaleInputMode) ui.scaleInputMode.value = scaleInputMode;
   if (ui.scaleInputDescription) {
@@ -1070,6 +1079,7 @@ function setScaleInputMode(mode) {
       ? 'Bounding box size in meters · X width / Y height / Z depth'
       : 'X / Y / Z scale factor';
   }
+  if (persist) updateTransformPreference('scaleInputMode', scaleInputMode);
   updateTransformFields();
 }
 
@@ -1132,7 +1142,7 @@ function configureGlbTransformTools() {
   ui.transformPanel.hidden = !available;
 
   if (!available) {
-    setGlbTransformEnabled(false);
+    setGlbTransformEnabled(false, false);
     originalGlbTransform = null;
     return;
   }
@@ -1143,23 +1153,21 @@ function configureGlbTransformTools() {
     scale: currentModel.scale.clone(),
   };
 
-  ui.transformEnabled.checked = false;
-  ui.transformSpace.value = 'world';
-  ui.transformPivot.value = 'bottom';
-  transformPivotMode = 'bottom';
-  setUnifiedScaleEnabled(true);
-  setScaleInputMode('factor');
-  transformControls.setMode('translate');
-  transformControls.setSpace('world');
-  setTransformModeButtonState('translate');
-  setGlbTransformEnabled(false);
+  setTransformSpace(transformPreferences.space, false);
+  setTransformPivotMode(transformPreferences.pivot, false);
+  setUnifiedScaleEnabled(transformPreferences.lockXYZ, false);
+  setScaleInputMode(transformPreferences.scaleInputMode, false);
+  transformControls.setMode(transformPreferences.mode);
+  setTransformModeButtonState(transformPreferences.mode);
+  setGlbTransformEnabled(transformPreferences.editEnabled, false);
   updateTransformFields();
   updateGlbTransformState();
 }
 
-function setGlbTransformEnabled(enabled) {
+function setGlbTransformEnabled(enabled, persist = true) {
   glbTransformEnabled = Boolean(enabled && isGlbModel());
   ui.transformEnabled.checked = glbTransformEnabled;
+  if (persist) updateTransformPreference('editEnabled', Boolean(enabled));
   if (!glbTransformEnabled && precisionAlignActive) stopPrecisionAlign(false);
 
   if (glbTransformEnabled) {
@@ -1194,10 +1202,11 @@ function setTransformModeButtonState(mode) {
   }
 }
 
-function setTransformMode(mode) {
-  if (!glbTransformEnabled || !['translate', 'rotate', 'scale'].includes(mode)) return;
+function setTransformMode(mode, persist = true) {
+  if (!['translate', 'rotate', 'scale'].includes(mode) || !isGlbModel()) return;
   transformControls.setMode(mode);
-  syncTransformPivotProxy();
+  if (persist) updateTransformPreference('mode', mode);
+  if (glbTransformEnabled) syncTransformPivotProxy();
   setTransformModeButtonState(mode);
 }
 
