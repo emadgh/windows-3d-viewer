@@ -51,8 +51,8 @@ updaterSection.innerHTML = `
 `;
 
 const firstSettingsSection = modal?.querySelector('.settings-section');
-if (modal && firstSettingsSection) {
-  modal.insertBefore(updaterSection, firstSettingsSection);
+if (firstSettingsSection?.parentNode) {
+  firstSettingsSection.parentNode.insertBefore(updaterSection, firstSettingsSection);
 }
 
 const updateVersionBadge = updaterSection.querySelector('#updateVersionBadge');
