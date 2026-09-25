@@ -1283,8 +1283,12 @@ function resetPrecisionAlignGuides() {
 
   precisionGuides.x.p1 = { x: center.x - length * 0.5, y: center.y };
   precisionGuides.x.p2 = { x: center.x + length * 0.5, y: center.y };
-  precisionGuides.y.p1 = { x: center.x, y: center.y - length * 0.5 };
-  precisionGuides.y.p2 = { x: center.x, y: center.y + length * 0.5 };
+
+  // SVG screen-space Y increases downward, but Precision Align treats p2 as
+  // the positive end of each guide. Put Y p2 above p1 so the visible Y+ end
+  // matches positive world Y instead of being vertically reversed.
+  precisionGuides.y.p1 = { x: center.x, y: center.y + length * 0.5 };
+  precisionGuides.y.p2 = { x: center.x, y: center.y - length * 0.5 };
 
   clampGuidePoint(precisionGuides.x.p1, width, height);
   clampGuidePoint(precisionGuides.x.p2, width, height);
