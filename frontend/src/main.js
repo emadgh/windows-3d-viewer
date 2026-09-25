@@ -49,6 +49,7 @@ const ui = {
   axesToggle: document.querySelector('#axesToggle'),
   autorotateToggle: document.querySelector('#autorotateToggle'),
   boundsToggleButton: document.querySelector('#boundsToggleButton'),
+  scalePersonToggleButton: document.querySelector('#scalePersonToggleButton'),
   boundsTarget: document.querySelector('#boundsTarget'),
   dimensionX: document.querySelector('#dimensionX'),
   dimensionY: document.querySelector('#dimensionY'),
@@ -70,6 +71,24 @@ const ui = {
   resetTransformButton: document.querySelector('#resetTransformButton'),
   saveGlbButton: document.querySelector('#saveGlbButton'),
   transformState: document.querySelector('#transformState'),
+  precisionAlignButton: document.querySelector('#precisionAlignButton'),
+  precisionAlignOverlay: document.querySelector('#precisionAlignOverlay'),
+  precisionAlignSvg: document.querySelector('#precisionAlignSvg'),
+  alignXLine: document.querySelector('#alignXLine'),
+  alignYLine: document.querySelector('#alignYLine'),
+  alignX1: document.querySelector('#alignX1'),
+  alignX2: document.querySelector('#alignX2'),
+  alignY1: document.querySelector('#alignY1'),
+  alignY2: document.querySelector('#alignY2'),
+  alignXLabel: document.querySelector('#alignXLabel'),
+  alignYLabel: document.querySelector('#alignYLabel'),
+  alignXAngle: document.querySelector('#alignXAngle'),
+  alignYAngle: document.querySelector('#alignYAngle'),
+  alignCorrection: document.querySelector('#alignCorrection'),
+  alignAxisError: document.querySelector('#alignAxisError'),
+  alignResetButton: document.querySelector('#alignResetButton'),
+  alignCancelButton: document.querySelector('#alignCancelButton'),
+  alignConfirmButton: document.querySelector('#alignConfirmButton'),
   emptyState: document.querySelector('#emptyState'),
   viewportBadge: document.querySelector('#viewportBadge'),
   modelName: document.querySelector('#modelName'),
@@ -124,11 +143,13 @@ transformControls.addEventListener('mouseDown', () => {
 });
 transformControls.addEventListener('mouseUp', () => {
   controls.enabled = true;
+  refreshScalePersonAnchor();
 });
 transformControls.addEventListener('objectChange', () => {
   updateTransformFields();
   updateGlbTransformState();
   updateBoundsMeasurement();
+  positionScalePersonReference();
 });
 
 const pmrem = new THREE.PMREMGenerator(renderer);
@@ -174,6 +195,32 @@ boundsHelper.material.depthTest = false;
 boundsHelper.material.depthWrite = false;
 scene.add(boundsHelper);
 
+const scalePersonTexture = new THREE.TextureLoader().load(
+  new URL('./scale-person-175.svg', document.baseURI).href,
+  () => positionScalePersonReference(),
+);
+scalePersonTexture.colorSpace = THREE.SRGBColorSpace;
+scalePersonTexture.minFilter = THREE.LinearFilter;
+scalePersonTexture.magFilter = THREE.LinearFilter;
+
+const scalePersonMaterial = new THREE.SpriteMaterial({
+  map: scalePersonTexture,
+  transparent: true,
+  opacity: 0.84,
+  depthTest: true,
+  depthWrite: false,
+  toneMapped: false,
+});
+const scalePersonSprite = new THREE.Sprite(scalePersonMaterial);
+scalePersonSprite.name = '__viewer_scale_person_175__';
+scalePersonSprite.userData.viewerHelper = true;
+// SVG viewBox is 1:2. The actual human spans y=15..190, exactly 175/200
+// of the image, so a 2.0 m sprite produces an exact 1.75 m human figure.
+scalePersonSprite.scale.set(1, 2, 1);
+scalePersonSprite.visible = false;
+scalePersonSprite.renderOrder = 15;
+scene.add(scalePersonSprite);
+
 const groundMaterial = new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.24, transparent: true });
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), groundMaterial);
 ground.rotation.x = -Math.PI / 2;
@@ -208,6 +255,15 @@ let boundsVisible = false;
 let glbTransformEnabled = false;
 let originalGlbTransform = null;
 let glbExportInProgress = false;
+let scalePersonVisible = true;
+let scalePersonAnchor = null;
+let precisionAlignActive = false;
+let precisionAlignDrag = null;
+let precisionAlignAutoRotateWasEnabled = false;
+const precisionGuides = {
+  x: { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 } },
+  y: { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 } },
+};
 const clock = new THREE.Clock();
 
 manager.setURLModifier((url) => resolveLocalAsset(url));
@@ -417,6 +473,7 @@ function installModel(object, animations, fileName) {
   updateWireOverlays();
   renderObjectTree();
   fitObject(currentModel, false);
+  refreshScalePersonAnchor();
 }
 
 function addWireOverlay(mesh) {
@@ -435,6 +492,9 @@ function addWireOverlay(mesh) {
 }
 
 function clearCurrentModel() {
+  if (precisionAlignActive) stopPrecisionAlign(false);
+  scalePersonAnchor = null;
+  scalePersonSprite.visible = false;
   setGlbTransformEnabled(false);
   ui.transformPanel.hidden = true;
   originalGlbTransform = null;
@@ -527,6 +587,62 @@ function isGlbModel() {
   return Boolean(currentModel) && getExtension(currentFileName) === 'glb';
 }
 
+function refreshScalePersonAnchor() {
+  if (!currentModel) {
+    scalePersonAnchor = null;
+    scalePersonSprite.visible = false;
+    return;
+  }
+
+  currentModel.updateWorldMatrix(true, true);
+  const box = new THREE.Box3().setFromObject(currentModel, true);
+  if (box.isEmpty()) {
+    scalePersonAnchor = null;
+    scalePersonSprite.visible = false;
+    return;
+  }
+
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const metersPerUnit = Math.max(getUnityMetersPerUnit(), 1e-9);
+  scalePersonAnchor = {
+    center,
+    floorY: box.min.y,
+    metersPerUnit,
+    sideOffset: Math.hypot(size.x, size.z) * 0.5 + (0.62 / metersPerUnit),
+  };
+  positionScalePersonReference();
+}
+
+function positionScalePersonReference() {
+  if (!scalePersonVisible || !currentModel || !scalePersonAnchor) {
+    scalePersonSprite.visible = false;
+    return;
+  }
+
+  camera.updateMatrixWorld();
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  right.y = 0;
+  if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
+  else right.normalize();
+
+  const unitsPerMeter = 1 / scalePersonAnchor.metersPerUnit;
+  scalePersonSprite.scale.set(1 * unitsPerMeter, 2 * unitsPerMeter, 1);
+  scalePersonSprite.position.copy(scalePersonAnchor.center).addScaledVector(right, scalePersonAnchor.sideOffset);
+  // The flat SVG is 2.0 m high while the person itself spans exactly 1.75 m.
+  // Convert meters to source-file units so FBX/3DS and GLB all compare correctly.
+  scalePersonSprite.position.y = scalePersonAnchor.floorY + (0.9 * unitsPerMeter);
+  scalePersonSprite.visible = true;
+}
+
+function setScalePersonVisible(visible) {
+  scalePersonVisible = Boolean(visible);
+  ui.scalePersonToggleButton.setAttribute('aria-pressed', String(scalePersonVisible));
+  ui.scalePersonToggleButton.classList.toggle('active', scalePersonVisible);
+  if (scalePersonVisible && !scalePersonAnchor) refreshScalePersonAnchor();
+  else positionScalePersonReference();
+}
+
 function configureGlbTransformTools() {
   const available = isGlbModel();
   ui.transformPanel.hidden = !available;
@@ -556,6 +672,7 @@ function configureGlbTransformTools() {
 function setGlbTransformEnabled(enabled) {
   glbTransformEnabled = Boolean(enabled && isGlbModel());
   ui.transformEnabled.checked = glbTransformEnabled;
+  if (!glbTransformEnabled && precisionAlignActive) stopPrecisionAlign(false);
 
   if (glbTransformEnabled) {
     transformControls.attach(currentModel);
@@ -568,6 +685,7 @@ function setGlbTransformEnabled(enabled) {
 
   ui.transformModeButtons.forEach((button) => { button.disabled = !glbTransformEnabled; });
   ui.transformSpace.disabled = !glbTransformEnabled;
+  ui.precisionAlignButton.disabled = !glbTransformEnabled;
   [
     ui.transformPositionX, ui.transformPositionY, ui.transformPositionZ,
     ui.transformRotationX, ui.transformRotationY, ui.transformRotationZ,
@@ -660,6 +778,7 @@ function applyTransformFields() {
   updateTransformFields();
   updateGlbTransformState();
   updateBoundsMeasurement();
+  refreshScalePersonAnchor();
 }
 
 function resetGlbTransform() {
@@ -671,6 +790,213 @@ function resetGlbTransform() {
   updateTransformFields();
   updateGlbTransformState();
   updateBoundsMeasurement();
+  refreshScalePersonAnchor();
+}
+
+function getPrecisionViewportSize() {
+  return {
+    width: Math.max(1, ui.viewport.clientWidth),
+    height: Math.max(1, ui.viewport.clientHeight),
+  };
+}
+
+function projectModelCenterToViewport() {
+  const { width, height } = getPrecisionViewportSize();
+  if (!currentModel) return { x: width * 0.5, y: height * 0.5 };
+
+  const box = new THREE.Box3().setFromObject(currentModel, true);
+  if (box.isEmpty()) return { x: width * 0.5, y: height * 0.5 };
+
+  const center = box.getCenter(new THREE.Vector3()).project(camera);
+  return {
+    x: (center.x * 0.5 + 0.5) * width,
+    y: (-center.y * 0.5 + 0.5) * height,
+  };
+}
+
+function clampGuidePoint(point, width, height) {
+  const margin = 12;
+  point.x = THREE.MathUtils.clamp(point.x, margin, Math.max(margin, width - margin));
+  point.y = THREE.MathUtils.clamp(point.y, margin, Math.max(margin, height - margin));
+}
+
+function resetPrecisionAlignGuides() {
+  const { width, height } = getPrecisionViewportSize();
+  ui.precisionAlignSvg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  const center = projectModelCenterToViewport();
+  const length = THREE.MathUtils.clamp(Math.min(width, height) * 0.34, 110, 360);
+
+  precisionGuides.x.p1 = { x: center.x - length * 0.5, y: center.y };
+  precisionGuides.x.p2 = { x: center.x + length * 0.5, y: center.y };
+  precisionGuides.y.p1 = { x: center.x, y: center.y - length * 0.5 };
+  precisionGuides.y.p2 = { x: center.x, y: center.y + length * 0.5 };
+
+  clampGuidePoint(precisionGuides.x.p1, width, height);
+  clampGuidePoint(precisionGuides.x.p2, width, height);
+  clampGuidePoint(precisionGuides.y.p1, width, height);
+  clampGuidePoint(precisionGuides.y.p2, width, height);
+  renderPrecisionAlignGuides();
+}
+
+function setSvgLine(line, p1, p2) {
+  line.setAttribute('x1', p1.x);
+  line.setAttribute('y1', p1.y);
+  line.setAttribute('x2', p2.x);
+  line.setAttribute('y2', p2.y);
+}
+
+function setSvgPoint(circle, point) {
+  circle.setAttribute('cx', point.x);
+  circle.setAttribute('cy', point.y);
+}
+
+function guideAngleDegrees(guide) {
+  return THREE.MathUtils.radToDeg(Math.atan2(guide.p2.y - guide.p1.y, guide.p2.x - guide.p1.x));
+}
+
+function guideLength(guide) {
+  return Math.hypot(guide.p2.x - guide.p1.x, guide.p2.y - guide.p1.y);
+}
+
+function normalizeAxisDegrees(value) {
+  return ((value + 90) % 180 + 180) % 180 - 90;
+}
+
+function getPrecisionAlignMetrics() {
+  const xAngle = guideAngleDegrees(precisionGuides.x);
+  const yAngle = guideAngleDegrees(precisionGuides.y);
+  const xTilt = normalizeAxisDegrees(xAngle);
+  const yTilt = normalizeAxisDegrees(yAngle - 90);
+  const separation = Math.abs(normalizeAxisDegrees(yAngle - xAngle));
+  const axisError = Math.abs(90 - separation);
+  const correction = -(xTilt + yTilt) * 0.5;
+  const valid = guideLength(precisionGuides.x) >= 28 && guideLength(precisionGuides.y) >= 28;
+  return { xTilt, yTilt, correction, axisError, valid };
+}
+
+function renderPrecisionAlignGuides() {
+  setSvgLine(ui.alignXLine, precisionGuides.x.p1, precisionGuides.x.p2);
+  setSvgLine(ui.alignYLine, precisionGuides.y.p1, precisionGuides.y.p2);
+  setSvgPoint(ui.alignX1, precisionGuides.x.p1);
+  setSvgPoint(ui.alignX2, precisionGuides.x.p2);
+  setSvgPoint(ui.alignY1, precisionGuides.y.p1);
+  setSvgPoint(ui.alignY2, precisionGuides.y.p2);
+
+  ui.alignXLabel.setAttribute('x', precisionGuides.x.p2.x + 10);
+  ui.alignXLabel.setAttribute('y', precisionGuides.x.p2.y - 8);
+  ui.alignYLabel.setAttribute('x', precisionGuides.y.p2.x + 10);
+  ui.alignYLabel.setAttribute('y', precisionGuides.y.p2.y - 8);
+
+  const metrics = getPrecisionAlignMetrics();
+  ui.alignXAngle.textContent = `${metrics.xTilt.toFixed(2)}°`;
+  ui.alignYAngle.textContent = `${metrics.yTilt.toFixed(2)}°`;
+  ui.alignCorrection.textContent = `${metrics.correction.toFixed(2)}°`;
+  ui.alignAxisError.textContent = `${metrics.axisError.toFixed(2)}°`;
+  ui.alignAxisError.classList.toggle('warning', metrics.axisError > 3);
+  ui.alignConfirmButton.disabled = !metrics.valid;
+}
+
+function startPrecisionAlign() {
+  if (!glbTransformEnabled || !isGlbModel()) return;
+  precisionAlignActive = true;
+  precisionAlignAutoRotateWasEnabled = controls.autoRotate;
+  controls.autoRotate = false;
+  transformControls.detach();
+  transformHelper.visible = false;
+  controls.enabled = false;
+  ui.precisionAlignOverlay.hidden = false;
+  resetPrecisionAlignGuides();
+  setStatus('Precision Align: place X and Y guides on model directions');
+}
+
+function stopPrecisionAlign(restoreTransform = true) {
+  precisionAlignActive = false;
+  precisionAlignDrag = null;
+  ui.precisionAlignOverlay.hidden = true;
+  controls.enabled = true;
+  controls.autoRotate = precisionAlignAutoRotateWasEnabled && ui.autorotateToggle.checked;
+  precisionAlignAutoRotateWasEnabled = false;
+  if (restoreTransform && glbTransformEnabled && currentModel) {
+    transformControls.attach(currentModel);
+    transformHelper.visible = true;
+  }
+}
+
+function pointerToPrecisionCoordinates(event) {
+  const rect = ui.precisionAlignSvg.getBoundingClientRect();
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+function beginPrecisionDrag(event, guideName, pointName) {
+  if (!precisionAlignActive) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const point = pointerToPrecisionCoordinates(event);
+  const guide = precisionGuides[guideName];
+  precisionAlignDrag = {
+    pointerId: event.pointerId,
+    guideName,
+    pointName,
+    startPointer: point,
+    startP1: { ...guide.p1 },
+    startP2: { ...guide.p2 },
+  };
+}
+
+function updatePrecisionDrag(event) {
+  if (!precisionAlignDrag || event.pointerId !== precisionAlignDrag.pointerId) return;
+  const { width, height } = getPrecisionViewportSize();
+  const pointer = pointerToPrecisionCoordinates(event);
+  const dxRaw = pointer.x - precisionAlignDrag.startPointer.x;
+  const dyRaw = pointer.y - precisionAlignDrag.startPointer.y;
+  const guide = precisionGuides[precisionAlignDrag.guideName];
+
+  if (precisionAlignDrag.pointName === 'line') {
+    const margin = 12;
+    const minX = Math.min(precisionAlignDrag.startP1.x, precisionAlignDrag.startP2.x);
+    const maxX = Math.max(precisionAlignDrag.startP1.x, precisionAlignDrag.startP2.x);
+    const minY = Math.min(precisionAlignDrag.startP1.y, precisionAlignDrag.startP2.y);
+    const maxY = Math.max(precisionAlignDrag.startP1.y, precisionAlignDrag.startP2.y);
+    const dx = THREE.MathUtils.clamp(dxRaw, margin - minX, width - margin - maxX);
+    const dy = THREE.MathUtils.clamp(dyRaw, margin - minY, height - margin - maxY);
+    guide.p1 = { x: precisionAlignDrag.startP1.x + dx, y: precisionAlignDrag.startP1.y + dy };
+    guide.p2 = { x: precisionAlignDrag.startP2.x + dx, y: precisionAlignDrag.startP2.y + dy };
+  } else {
+    guide[precisionAlignDrag.pointName] = { x: pointer.x, y: pointer.y };
+    clampGuidePoint(guide[precisionAlignDrag.pointName], width, height);
+  }
+  renderPrecisionAlignGuides();
+}
+
+function endPrecisionDrag(event) {
+  if (!precisionAlignDrag || event.pointerId !== precisionAlignDrag.pointerId) return;
+  precisionAlignDrag = null;
+}
+
+function applyPrecisionAlignment() {
+  if (!precisionAlignActive || !currentModel) return;
+  const metrics = getPrecisionAlignMetrics();
+  if (!metrics.valid) return;
+
+  currentModel.updateWorldMatrix(true, true);
+  const beforeCenter = new THREE.Box3().setFromObject(currentModel, true).getCenter(new THREE.Vector3());
+  const viewAxis = camera.getWorldDirection(new THREE.Vector3()).normalize();
+  const delta = new THREE.Quaternion().setFromAxisAngle(viewAxis, THREE.MathUtils.degToRad(metrics.correction));
+
+  currentModel.quaternion.premultiply(delta);
+  currentModel.updateMatrixWorld(true);
+
+  const afterCenter = new THREE.Box3().setFromObject(currentModel, true).getCenter(new THREE.Vector3());
+  currentModel.position.add(beforeCenter.sub(afterCenter));
+  currentModel.updateMatrixWorld(true);
+
+  updateTransformFields();
+  updateGlbTransformState();
+  updateBoundsMeasurement();
+  updateStageFromModel();
+  refreshScalePersonAnchor();
+  stopPrecisionAlign(true);
+  setStatus(`Precision alignment applied: ${metrics.correction.toFixed(2)}°`);
 }
 
 function collectGlbExportState() {
@@ -1220,8 +1546,11 @@ function onResize() {
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  positionScalePersonReference();
+  if (precisionAlignActive) resetPrecisionAlignGuides();
 }
 
+controls.addEventListener('change', positionScalePersonReference);
 new ResizeObserver(onResize).observe(ui.viewport);
 onResize();
 
@@ -1265,6 +1594,7 @@ ui.boundsToggleButton.addEventListener('click', () => {
   ui.boundsToggleButton.setAttribute('aria-pressed', String(boundsVisible));
   updateBoundsMeasurement();
 });
+ui.scalePersonToggleButton.addEventListener('click', () => setScalePersonVisible(!scalePersonVisible));
 ui.transformEnabled.addEventListener('change', () => setGlbTransformEnabled(ui.transformEnabled.checked));
 ui.transformModeButtons.forEach((button) => {
   button.addEventListener('click', () => setTransformMode(button.dataset.transformMode));
@@ -1282,6 +1612,25 @@ ui.transformSpace.addEventListener('change', () => {
 });
 ui.resetTransformButton.addEventListener('click', resetGlbTransform);
 ui.saveGlbButton.addEventListener('click', exportCurrentGlb);
+ui.precisionAlignButton.addEventListener('click', startPrecisionAlign);
+ui.alignResetButton.addEventListener('click', resetPrecisionAlignGuides);
+ui.alignCancelButton.addEventListener('click', () => stopPrecisionAlign(true));
+ui.alignConfirmButton.addEventListener('click', applyPrecisionAlignment);
+
+[
+  [ui.alignX1, 'x', 'p1'],
+  [ui.alignX2, 'x', 'p2'],
+  [ui.alignY1, 'y', 'p1'],
+  [ui.alignY2, 'y', 'p2'],
+  [ui.alignXLine, 'x', 'line'],
+  [ui.alignYLine, 'y', 'line'],
+].forEach(([element, guideName, pointName]) => {
+  element.addEventListener('pointerdown', (event) => beginPrecisionDrag(event, guideName, pointName));
+});
+window.addEventListener('pointermove', updatePrecisionDrag);
+window.addEventListener('pointerup', endPrecisionDrag);
+window.addEventListener('pointercancel', endPrecisionDrag);
+
 ui.autorotateToggle.addEventListener('change', () => {
   controls.autoRotate = ui.autorotateToggle.checked;
   controls.autoRotateSpeed = 1.2;
@@ -1300,9 +1649,22 @@ ui.clearIsolationButton.addEventListener('click', () => clearIsolation());
 renderer.domElement.addEventListener('dblclick', handleDoubleClick);
 
 window.addEventListener('keydown', (event) => {
-  if (!glbTransformEnabled || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
   const tag = document.activeElement?.tagName?.toLowerCase();
   if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+
+  if (precisionAlignActive) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      stopPrecisionAlign(true);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      applyPrecisionAlignment();
+    }
+    return;
+  }
+
+  if (!glbTransformEnabled) return;
   if (event.key.toLowerCase() === 'w') setTransformMode('translate');
   else if (event.key.toLowerCase() === 'e') setTransformMode('rotate');
   else if (event.key.toLowerCase() === 'r') setTransformMode('scale');
