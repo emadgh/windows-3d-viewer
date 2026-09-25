@@ -39,6 +39,9 @@ const ui = {
   fitButton: document.querySelector('#fitButton'),
   resetButton: document.querySelector('#resetButton'),
   screenshotButton: document.querySelector('#screenshotButton'),
+  settingsButton: document.querySelector('#settingsButton'),
+  settingsModal: document.querySelector('#settingsModal'),
+  closeSettingsButton: document.querySelector('#closeSettingsButton'),
   modeSelect: document.querySelector('#modeSelect'),
   clayColorControl: document.querySelector('#clayColorControl'),
   clayColor: document.querySelector('#clayColor'),
@@ -391,6 +394,23 @@ function findPrimaryFile(files) {
   return files.find((file) => MODEL_EXTENSIONS.has(getExtension(file.name))) || null;
 }
 
+async function refreshNativeGlbSourceState() {
+  if (getExtension(currentFileName) !== 'glb' || !window.zero?.invoke) {
+    currentGlbNativeSource = false;
+    return false;
+  }
+
+  try {
+    const source = await window.zero.invoke('app.getActiveSource', {});
+    currentGlbNativeSource = Boolean(source?.available);
+    return currentGlbNativeSource;
+  } catch (error) {
+    console.warn('Could not query native GLB source path.', error);
+    currentGlbNativeSource = false;
+    return false;
+  }
+}
+
 async function loadFiles(fileList, options = {}) {
   const files = Array.from(fileList || []);
   if (!files.length) return;
@@ -420,6 +440,9 @@ async function loadFiles(fileList, options = {}) {
   }
 
   currentFileName = primary.name;
+  if (!currentGlbSaveHandle && getExtension(primary.name) === 'glb') {
+    await refreshNativeGlbSourceState();
+  }
   ui.modelName.textContent = primary.name;
   ui.formatText.textContent = getExtension(primary.name).toUpperCase();
   ui.emptyState.hidden = true;
@@ -1735,7 +1758,11 @@ async function saveCurrentGlb() {
   if (!isGlbModel() || glbExportInProgress) return;
 
   if (!currentGlbSaveHandle && !currentGlbNativeSource) {
-    setStatus('Save cannot overwrite this file. Use Save As once to choose a writable file.', true);
+    await refreshNativeGlbSourceState();
+  }
+
+  if (!currentGlbSaveHandle && !currentGlbNativeSource) {
+    setStatus('Save cannot overwrite this file because no writable source path is available. Use Save As once.', true);
     return;
   }
 
@@ -2247,6 +2274,26 @@ function animate() {
 }
 animate();
 
+function openSettingsModal(focusUpdater = false) {
+  if (!ui.settingsModal) return;
+  ui.settingsModal.hidden = false;
+  window.dispatchEvent(new CustomEvent('w3dv:settings-open', { detail: { focusUpdater } }));
+  requestAnimationFrame(() => ui.closeSettingsButton?.focus?.());
+}
+
+function closeSettingsModal() {
+  if (!ui.settingsModal) return;
+  ui.settingsModal.hidden = true;
+  window.dispatchEvent(new CustomEvent('w3dv:settings-close'));
+  ui.settingsButton?.focus?.();
+}
+
+ui.settingsButton?.addEventListener('click', () => openSettingsModal(false));
+ui.closeSettingsButton?.addEventListener('click', closeSettingsModal);
+ui.settingsModal?.addEventListener('click', (event) => {
+  if (event.target === ui.settingsModal) closeSettingsModal();
+});
+
 ui.openButton.addEventListener('click', openWithFileSystemPicker);
 ui.emptyOpenButton.addEventListener('click', openWithFileSystemPicker);
 ui.fileInput.addEventListener('change', async () => {
@@ -2349,6 +2396,12 @@ function cycleViewMode() {
 }
 
 window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && ui.settingsModal && !ui.settingsModal.hidden) {
+    event.preventDefault();
+    closeSettingsModal();
+    return;
+  }
+
   const tag = document.activeElement?.tagName?.toLowerCase();
   const editingField = tag === 'input' || tag === 'select' || tag === 'textarea';
 
@@ -2425,6 +2478,11 @@ window.addEventListener('drop', async (event) => {
   ui.viewport.classList.remove('dragging');
   if (event.dataTransfer?.files?.length) await loadFiles(event.dataTransfer.files);
 });
-window.addEventListener('beforeunload', releaseBlobUrls);
+window.addEventListener('beforeunload', () => {
+  if (pendingLoadSession) disposeAssetSession(pendingLoadSession);
+  if (currentAssetSession && currentAssetSession !== pendingLoadSession) {
+    disposeAssetSession(currentAssetSession);
+  }
+});
 
 setStatus('Ready');
