@@ -1,6 +1,6 @@
 [package]
 name = "viewer-3d"
-version = "0.5.15"
+version = "0.5.16"
 edition = "2021"
 rust-version = "1.85"
 description = "Single-file Windows 3D model viewer with an embedded Vite frontend"
