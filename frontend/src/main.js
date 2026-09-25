@@ -259,6 +259,7 @@ let scalePersonVisible = true;
 let scalePersonAnchor = null;
 let precisionAlignActive = false;
 let precisionAlignDrag = null;
+let precisionAlignAutoRotateWasEnabled = false;
 const precisionGuides = {
   x: { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 } },
   y: { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 } },
@@ -603,10 +604,12 @@ function refreshScalePersonAnchor() {
 
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
+  const metersPerUnit = Math.max(getUnityMetersPerUnit(), 1e-9);
   scalePersonAnchor = {
     center,
     floorY: box.min.y,
-    sideOffset: Math.max(0.78, Math.hypot(size.x, size.z) * 0.5 + 0.62),
+    metersPerUnit,
+    sideOffset: Math.hypot(size.x, size.z) * 0.5 + (0.62 / metersPerUnit),
   };
   positionScalePersonReference();
 }
@@ -623,11 +626,12 @@ function positionScalePersonReference() {
   if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
   else right.normalize();
 
+  const unitsPerMeter = 1 / scalePersonAnchor.metersPerUnit;
+  scalePersonSprite.scale.set(1 * unitsPerMeter, 2 * unitsPerMeter, 1);
   scalePersonSprite.position.copy(scalePersonAnchor.center).addScaledVector(right, scalePersonAnchor.sideOffset);
-  // On the 2.0 m sprite the figure's feet are at y=190/200.
-  // Centering the sprite 0.9 m above the model floor places the feet at y=0
-  // and the top of the head at exactly +1.75 m.
-  scalePersonSprite.position.y = scalePersonAnchor.floorY + 0.9;
+  // The flat SVG is 2.0 m high while the person itself spans exactly 1.75 m.
+  // Convert meters to source-file units so FBX/3DS and GLB all compare correctly.
+  scalePersonSprite.position.y = scalePersonAnchor.floorY + (0.9 * unitsPerMeter);
   scalePersonSprite.visible = true;
 }
 
@@ -895,6 +899,8 @@ function renderPrecisionAlignGuides() {
 function startPrecisionAlign() {
   if (!glbTransformEnabled || !isGlbModel()) return;
   precisionAlignActive = true;
+  precisionAlignAutoRotateWasEnabled = controls.autoRotate;
+  controls.autoRotate = false;
   transformControls.detach();
   transformHelper.visible = false;
   controls.enabled = false;
@@ -908,6 +914,8 @@ function stopPrecisionAlign(restoreTransform = true) {
   precisionAlignDrag = null;
   ui.precisionAlignOverlay.hidden = true;
   controls.enabled = true;
+  controls.autoRotate = precisionAlignAutoRotateWasEnabled && ui.autorotateToggle.checked;
+  precisionAlignAutoRotateWasEnabled = false;
   if (restoreTransform && glbTransformEnabled && currentModel) {
     transformControls.attach(currentModel);
     transformHelper.visible = true;
