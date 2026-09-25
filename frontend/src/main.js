@@ -838,7 +838,8 @@ function resetPrecisionAlignGuides() {
   clampGuidePoint(precisionGuides.x.p2, width, height);
   clampGuidePoint(precisionGuides.y.p1, width, height);
   clampGuidePoint(precisionGuides.y.p2, width, height);
-  renderPrecisionAlignGuides();
+  precisionSurfaceSample = samplePrecisionSurface();
+  renderPrecisionAlignGuides(false, false);
 }
 
 function setSvgLine(line, p1, p2) {
@@ -1006,8 +1007,6 @@ function startPrecisionAlign() {
   controls.enabled = false;
   ui.precisionAlignOverlay.hidden = false;
   resetPrecisionAlignGuides();
-  precisionSurfaceSample = samplePrecisionSurface();
-  renderPrecisionAlignGuides(false, false);
   setStatus('Precision Align: place all four X/Y endpoints on the model surface; labeled ends are +X/+Y');
 }
 
