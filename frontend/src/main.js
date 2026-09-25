@@ -328,6 +328,14 @@ function resolveSessionAsset(session, url) {
 function disposeAssetSession(session) {
   if (!session || session.disposed) return;
   session.disposed = true;
+
+  for (const disposable of session.disposables || []) {
+    try { disposable?.dispose?.(); } catch (error) {
+      console.warn('Could not dispose loader resource.', error);
+    }
+  }
+  if (session.disposables) session.disposables.length = 0;
+
   for (const url of session.blobUrls) URL.revokeObjectURL(url);
   session.blobUrls.length = 0;
   session.assetUrlMap.clear();
@@ -342,6 +350,7 @@ function createLoadSession(files) {
     disposed: false,
     cancelled: false,
     errors: [],
+    disposables: [],
   };
 
   for (const file of files) {
@@ -414,6 +423,9 @@ async function loadFiles(fileList, options = {}) {
   setStatus(`Opening ${primary.name}…`);
 
   try {
+    const glbTextureMetadata = getExtension(primary.name) === 'glb'
+      ? await inspectGlbTextureMetadata(primary)
+      : null;
     const result = await loadModel(primary, files, session);
 
     if (pendingLoadSession !== session || session.cancelled) {
@@ -427,6 +439,19 @@ async function loadFiles(fileList, options = {}) {
     pendingLoadSession = null;
     currentAssetSession = session;
     installModel(result.object, result.animations || [], primary.name);
+
+    if (glbTextureMetadata?.textures > 0) {
+      const boundTextureSlots = countMaterialTextureSlots(result.object);
+      if (boundTextureSlots === 0) {
+        const extensionText = glbTextureMetadata.extensionsUsed.length
+          ? ` · extensions: ${glbTextureMetadata.extensionsUsed.join(', ')}`
+          : '';
+        session.errors.push(
+          `GLB declares ${glbTextureMetadata.textures} texture(s) / ${glbTextureMetadata.images} image(s) but no material texture maps were created${extensionText}`
+        );
+      }
+    }
+
     if (session.errors.length) {
       const unique = [...new Set(session.errors.map((url) => shortenUrl(url)))];
       setStatus(`${primary.name} loaded · missing assets: ${unique.join(', ')}`, true);
@@ -512,21 +537,20 @@ async function loadModel(primary, files, session) {
     case 'gltf': {
       const draco = new DRACOLoader(manager);
       const ktx2 = new KTX2Loader(manager);
+      session.disposables.push(draco, ktx2);
+
       draco.setDecoderPath(new URL('./draco/gltf/', document.baseURI).href);
       draco.preload();
       ktx2.setTranscoderPath(new URL('./basis/', document.baseURI).href);
       ktx2.detectSupport(renderer);
+
       const loader = new GLTFLoader(manager);
       loader.setDRACOLoader(draco);
       loader.setKTX2Loader(ktx2);
       loader.setMeshoptDecoder(MeshoptDecoder);
-      try {
-        const gltf = await loader.loadAsync(sourceUrl);
-        return { object: gltf.scene, animations: gltf.animations || [] };
-      } finally {
-        draco.dispose();
-        ktx2.dispose();
-      }
+
+      const gltf = await loader.loadAsync(sourceUrl);
+      return { object: gltf.scene, animations: gltf.animations || [] };
     }
     case 'fbx': {
       const object = await new FBXLoader(manager).loadAsync(sourceUrl);
@@ -577,6 +601,50 @@ async function loadModel(primary, files, session) {
       return { object: await new VRMLLoader(manager).loadAsync(sourceUrl), animations: [] };
     default:
       throw new Error(`Unsupported model format: .${ext}`);
+  }
+}
+
+function countMaterialTextureSlots(root) {
+  const textureProperties = [
+    'map', 'alphaMap', 'aoMap', 'bumpMap', 'normalMap', 'displacementMap',
+    'emissiveMap', 'metalnessMap', 'roughnessMap', 'clearcoatMap',
+    'clearcoatNormalMap', 'clearcoatRoughnessMap', 'iridescenceMap',
+    'iridescenceThicknessMap', 'sheenColorMap', 'sheenRoughnessMap',
+    'specularColorMap', 'specularIntensityMap', 'transmissionMap',
+    'thicknessMap',
+  ];
+  let count = 0;
+  root?.traverse?.((child) => {
+    if (!child.isMesh) return;
+    for (const material of toArray(child.material)) {
+      if (!material) continue;
+      for (const property of textureProperties) {
+        if (material[property]?.isTexture) count += 1;
+      }
+    }
+  });
+  return count;
+}
+
+async function inspectGlbTextureMetadata(file) {
+  if (getExtension(file?.name) !== 'glb') return null;
+  try {
+    const header = new DataView(await file.slice(0, 20).arrayBuffer());
+    if (header.byteLength < 20 || header.getUint32(0, true) !== 0x46546c67) return null;
+    const jsonLength = header.getUint32(12, true);
+    const jsonType = header.getUint32(16, true);
+    if (jsonType !== 0x4e4f534a || jsonLength <= 0 || jsonLength > 64 * 1024 * 1024) return null;
+    const jsonBytes = new Uint8Array(await file.slice(20, 20 + jsonLength).arrayBuffer());
+    const jsonText = new TextDecoder().decode(jsonBytes).replace(/\u0000+$/g, '').trim();
+    const json = JSON.parse(jsonText);
+    return {
+      textures: Array.isArray(json.textures) ? json.textures.length : 0,
+      images: Array.isArray(json.images) ? json.images.length : 0,
+      extensionsUsed: Array.isArray(json.extensionsUsed) ? json.extensionsUsed : [],
+    };
+  } catch (error) {
+    console.warn('Could not inspect GLB texture metadata.', error);
+    return null;
   }
 }
 
@@ -673,6 +741,7 @@ function disposeModelResources(root) {
   const geometries = new Set();
   const materials = new Set();
   const textures = new Set();
+  const imageBitmaps = new Set();
 
   root.traverse((child) => {
     if (child.geometry) geometries.add(child.geometry);
@@ -682,9 +751,29 @@ function disposeModelResources(root) {
     if (variants) Object.values(variants).forEach((value) => collectMaterial(value, materials, textures));
   });
 
+  for (const texture of textures) {
+    const candidates = [texture?.source?.data, texture?.image];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate)) {
+        for (const item of candidate) {
+          if (typeof item?.close === 'function') imageBitmaps.add(item);
+        }
+      } else if (typeof candidate?.close === 'function') {
+        imageBitmaps.add(candidate);
+      }
+    }
+  }
+
   geometries.forEach((value) => value?.dispose?.());
   materials.forEach((value) => value?.dispose?.());
   textures.forEach((value) => value?.dispose?.());
+
+  // GLTFLoader uses ImageBitmapLoader in Chromium/WebView2. ImageBitmap is not
+  // released by Texture.dispose(), so repeated GLB opens otherwise accumulate
+  // decoded image memory until later texture decodes/uploads can fail.
+  imageBitmaps.forEach((bitmap) => {
+    try { bitmap.close(); } catch { /* already closed or not owned anymore */ }
+  });
 }
 
 function collectMaterial(value, materials, textures) {
