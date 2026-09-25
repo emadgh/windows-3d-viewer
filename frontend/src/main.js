@@ -568,6 +568,7 @@ async function openWithFileSystemPicker() {
     try {
       const result = await window.zero.invoke('app.pickModelFile', {});
       if (!result?.selected) return;
+      window.__w3dvBeginOpenTransition?.();
       await window.__w3dvOpenNativeLaunchFile();
       return;
     } catch (error) {
@@ -608,6 +609,13 @@ async function openWithFileSystemPicker() {
     }
   }
 }
+
+window.__w3dvBeginOpenTransition = () => {
+  if (pendingLoadSession) pendingLoadSession.cancelled = true;
+  activeModelSessionId += 1;
+  invalidateCurrentSaveTarget();
+  updateGlbTransformState();
+};
 
 // The native launch bridge calls this directly for Explorer/open-with files.
 // Keeping the loader independent from the hidden file input avoids WebView2
@@ -2423,10 +2431,7 @@ ui.transformEnabled.addEventListener('change', () => setGlbTransformEnabled(ui.t
 ui.transformModeButtons.forEach((button) => {
   button.addEventListener('click', () => setTransformMode(button.dataset.transformMode));
 });
-ui.transformSpace.addEventListener('change', () => {
-  if (!glbTransformEnabled) return;
-  syncTransformPivotProxy();
-});
+ui.transformSpace.addEventListener('change', () => setTransformSpace(ui.transformSpace.value));
 ui.transformPivot.addEventListener('change', () => setTransformPivotMode(ui.transformPivot.value));
 ui.scaleInputMode.addEventListener('change', () => setScaleInputMode(ui.scaleInputMode.value));
 ui.unifiedScaleToggle.addEventListener('change', () => setUnifiedScaleEnabled(ui.unifiedScaleToggle.checked));
@@ -2537,8 +2542,7 @@ window.addEventListener('keydown', (event) => {
   else if (key === 'p') setScalePersonVisible(!scalePersonVisible);
   else if (key === 'c') takeScreenshot();
   else if (key === 'q' && glbTransformEnabled) {
-    ui.transformSpace.value = ui.transformSpace.value === 'local' ? 'world' : 'local';
-    syncTransformPivotProxy();
+    setTransformSpace(ui.transformSpace.value === 'local' ? 'world' : 'local');
   } else if (key === 'u' && glbTransformEnabled) {
     setUnifiedScaleEnabled(!unifiedScaleEnabled);
   } else if (key === 'g' && glbTransformEnabled) {
