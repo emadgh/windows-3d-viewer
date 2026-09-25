@@ -96,6 +96,39 @@
             <strong>Drop files to open</strong>
           </div>
         </div>
+        <div id="precisionAlignOverlay" class="precision-align-overlay" hidden>
+          <svg id="precisionAlignSvg" class="precision-align-svg" aria-label="Precision alignment guides">
+            <g class="precision-guide precision-guide-x" data-guide="x">
+              <line id="alignXLine" class="precision-line precision-line-x" />
+              <circle id="alignX1" class="precision-handle precision-handle-x" r="7" data-guide="x" data-point="p1" />
+              <circle id="alignX2" class="precision-handle precision-handle-x" r="7" data-guide="x" data-point="p2" />
+              <text id="alignXLabel" class="precision-axis-label precision-axis-label-x">X</text>
+            </g>
+            <g class="precision-guide precision-guide-y" data-guide="y">
+              <line id="alignYLine" class="precision-line precision-line-y" />
+              <circle id="alignY1" class="precision-handle precision-handle-y" r="7" data-guide="y" data-point="p1" />
+              <circle id="alignY2" class="precision-handle precision-handle-y" r="7" data-guide="y" data-point="p2" />
+              <text id="alignYLabel" class="precision-axis-label precision-axis-label-y">Y</text>
+            </g>
+          </svg>
+          <div class="precision-align-card">
+            <div class="precision-align-title">
+              <span>Precision Align</span>
+              <small>Drag endpoints or the lines</small>
+            </div>
+            <div class="precision-readouts">
+              <div><span>X tilt</span><strong id="alignXAngle">0.00°</strong></div>
+              <div><span>Y tilt</span><strong id="alignYAngle">0.00°</strong></div>
+              <div><span>Correction</span><strong id="alignCorrection">0.00°</strong></div>
+              <div><span>Axis error</span><strong id="alignAxisError">0.00°</strong></div>
+            </div>
+            <div class="precision-align-actions">
+              <button id="alignResetButton" type="button">Reset guides</button>
+              <button id="alignCancelButton" type="button">Cancel</button>
+              <button id="alignConfirmButton" type="button" class="primary">Confirm</button>
+            </div>
+          </div>
+        </div>
         <div id="viewportBadge" class="viewport-badge"><span class="badge-dot"></span><span>Ready</span></div>
       </section>
 
@@ -115,7 +148,10 @@
           <section class="panel dimensions-panel">
             <div class="panel-title row">
               <span>Bounds · Unity</span>
-              <button id="boundsToggleButton" class="ghost small bounds-toggle-button" type="button" aria-pressed="false">Show box</button>
+              <div class="bounds-actions">
+                <button id="scalePersonToggleButton" class="ghost small bounds-toggle-button" type="button" aria-pressed="true">Person 1.75m</button>
+                <button id="boundsToggleButton" class="ghost small bounds-toggle-button" type="button" aria-pressed="false">Show box</button>
+              </div>
             </div>
             <div id="boundsTarget" class="bounds-target">No model</div>
             <div class="dimensions-grid">
@@ -141,6 +177,10 @@
               <button type="button" data-transform-mode="rotate" aria-pressed="false" disabled>Rotate <kbd>E</kbd></button>
               <button type="button" data-transform-mode="scale" aria-pressed="false" disabled>Scale <kbd>R</kbd></button>
             </div>
+
+            <button id="precisionAlignButton" type="button" class="precision-align-launch" disabled>
+              Precision Align · X/Y guides
+            </button>
 
             <label class="transform-space-row">
               <span>Space</span>
