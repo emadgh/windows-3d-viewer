@@ -320,6 +320,15 @@ svg { display: block; }
 }
 .precision-handle-x { fill: #f28b8f; }
 .precision-handle-y { fill: #77d79b; }
+.precision-handle.miss {
+  opacity: .38;
+  stroke: #f0b66e;
+  stroke-dasharray: 3 2;
+}
+.precision-handle.snapped {
+  opacity: 1;
+  stroke: rgba(238,246,255,.95);
+}
 .precision-axis-label {
   font-size: 13px;
   font-family: Inter, "Segoe UI", sans-serif;
@@ -361,6 +370,7 @@ svg { display: block; }
 .precision-align-title small {
   color: #718095;
   font-size: 9px;
+  text-align: right;
 }
 .precision-readouts {
   display: grid;
