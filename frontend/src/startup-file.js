@@ -141,7 +141,7 @@ async function openNativeLaunchFileInternal() {
       throw new Error('Viewer file loader is unavailable.');
     }
 
-    await window.__w3dvLoadFiles(files);
+    await window.__w3dvLoadFiles(files, { nativeSource: true });
     await consumeLaunchRequest();
   } catch (error) {
     console.error('Could not open model supplied by Windows Explorer.', error);
