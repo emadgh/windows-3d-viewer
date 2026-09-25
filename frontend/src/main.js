@@ -60,6 +60,8 @@ const ui = {
   transformModeButtons: Array.from(document.querySelectorAll('[data-transform-mode]')),
   transformSpace: document.querySelector('#transformSpace'),
   transformPivot: document.querySelector('#transformPivot'),
+  scaleInputMode: document.querySelector('#scaleInputMode'),
+  scaleInputDescription: document.querySelector('#scaleInputDescription'),
   unifiedScaleToggle: document.querySelector('#unifiedScaleToggle'),
   transformPositionX: document.querySelector('#transformPositionX'),
   transformPositionY: document.querySelector('#transformPositionY'),
@@ -264,8 +266,9 @@ let lastModelBounds = null;
 let boundsVisible = false;
 let glbTransformEnabled = false;
 let originalGlbTransform = null;
-let transformPivotMode = 'center';
-let unifiedScaleEnabled = false;
+let transformPivotMode = 'bottom';
+let unifiedScaleEnabled = true;
+let scaleInputMode = 'factor';
 let glbExportInProgress = false;
 let currentGlbSaveHandle = null;
 let currentGlbNativeSource = false;
@@ -984,6 +987,80 @@ function setUnifiedScaleEnabled(enabled) {
   }
 }
 
+function getCurrentBoundsSizeMeters() {
+  if (!currentModel) return new THREE.Vector3();
+  currentModel.updateWorldMatrix(true, true);
+  const box = new THREE.Box3().setFromObject(currentModel, true);
+  if (box.isEmpty()) return new THREE.Vector3();
+  const metersPerUnit = getUnityMetersPerUnit();
+  return box.getSize(new THREE.Vector3()).multiplyScalar(metersPerUnit);
+}
+
+function setScaleInputMode(mode) {
+  scaleInputMode = mode === 'bounds' ? 'bounds' : 'factor';
+  if (ui.scaleInputMode) ui.scaleInputMode.value = scaleInputMode;
+  if (ui.scaleInputDescription) {
+    ui.scaleInputDescription.textContent = scaleInputMode === 'bounds'
+      ? 'Bounding box size in meters · X width / Y height / Z depth'
+      : 'X / Y / Z scale factor';
+  }
+  updateTransformFields();
+}
+
+function moveModelByWorldDelta(delta) {
+  if (!currentModel || delta.lengthSq() < 1e-18) return;
+  const worldPosition = currentModel.getWorldPosition(new THREE.Vector3()).add(delta);
+  if (currentModel.parent) {
+    currentModel.parent.updateWorldMatrix(true, false);
+    currentModel.position.copy(currentModel.parent.worldToLocal(worldPosition));
+  } else {
+    currentModel.position.copy(worldPosition);
+  }
+  currentModel.updateMatrixWorld(true);
+}
+
+function applyBoundsScaleInput(changedInput) {
+  const inputs = [ui.transformScaleX, ui.transformScaleY, ui.transformScaleZ];
+  const axisIndex = inputs.indexOf(changedInput);
+  if (axisIndex < 0 || !currentModel) return false;
+
+  const targetMeters = Math.abs(Number(changedInput.value));
+  if (!Number.isFinite(targetMeters) || targetMeters <= 0) return false;
+
+  const beforePivot = getTransformPivotWorldPosition();
+  const sizeMeters = getCurrentBoundsSizeMeters();
+  const currentMeters = sizeMeters.getComponent(axisIndex);
+  if (!Number.isFinite(currentMeters) || currentMeters <= 1e-12) return false;
+
+  let factor = targetMeters / currentMeters;
+  if (!Number.isFinite(factor) || factor <= 0) return false;
+  factor = THREE.MathUtils.clamp(factor, 0.000001, 1000000);
+
+  if (unifiedScaleEnabled) {
+    currentModel.scale.multiplyScalar(factor);
+  } else {
+    const axisName = ['x', 'y', 'z'][axisIndex];
+    currentModel.scale[axisName] = Math.max(0.000001, Math.abs(currentModel.scale[axisName] * factor));
+
+    // For rotated models a world-axis bounding dimension can depend on more
+    // than one local scale component. A few corrective iterations improve the
+    // requested dimension while keeping the edit predictable.
+    for (let iteration = 0; iteration < 4; iteration += 1) {
+      currentModel.updateMatrixWorld(true);
+      const measured = getCurrentBoundsSizeMeters().getComponent(axisIndex);
+      if (!Number.isFinite(measured) || measured <= 1e-12) break;
+      const correction = targetMeters / measured;
+      if (Math.abs(correction - 1) < 0.00001) break;
+      currentModel.scale[axisName] = Math.max(0.000001, Math.abs(currentModel.scale[axisName] * correction));
+    }
+  }
+
+  currentModel.updateMatrixWorld(true);
+  const afterPivot = getTransformPivotWorldPosition();
+  moveModelByWorldDelta(beforePivot.clone().sub(afterPivot));
+  return true;
+}
+
 function configureGlbTransformTools() {
   const available = isGlbModel();
   ui.transformPanel.hidden = !available;
@@ -1001,12 +1078,13 @@ function configureGlbTransformTools() {
   };
 
   ui.transformEnabled.checked = false;
-  ui.transformSpace.value = 'local';
-  ui.transformPivot.value = 'center';
-  transformPivotMode = 'center';
-  setUnifiedScaleEnabled(false);
+  ui.transformSpace.value = 'world';
+  ui.transformPivot.value = 'bottom';
+  transformPivotMode = 'bottom';
+  setUnifiedScaleEnabled(true);
+  setScaleInputMode('factor');
   transformControls.setMode('translate');
-  transformControls.setSpace('local');
+  transformControls.setSpace('world');
   setTransformModeButtonState('translate');
   setGlbTransformEnabled(false);
   updateTransformFields();
@@ -1031,6 +1109,7 @@ function setGlbTransformEnabled(enabled) {
   ui.transformModeButtons.forEach((button) => { button.disabled = !glbTransformEnabled; });
   ui.transformSpace.disabled = !glbTransformEnabled;
   ui.transformPivot.disabled = !glbTransformEnabled;
+  ui.scaleInputMode.disabled = !glbTransformEnabled;
   ui.unifiedScaleToggle.disabled = !glbTransformEnabled;
   ui.precisionAlignButton.disabled = !glbTransformEnabled;
   [
@@ -1073,9 +1152,17 @@ function updateTransformFields() {
   ui.transformRotationX.value = formatTransformNumber(THREE.MathUtils.radToDeg(currentModel.rotation.x), 2);
   ui.transformRotationY.value = formatTransformNumber(THREE.MathUtils.radToDeg(currentModel.rotation.y), 2);
   ui.transformRotationZ.value = formatTransformNumber(THREE.MathUtils.radToDeg(currentModel.rotation.z), 2);
-  ui.transformScaleX.value = formatTransformNumber(currentModel.scale.x);
-  ui.transformScaleY.value = formatTransformNumber(currentModel.scale.y);
-  ui.transformScaleZ.value = formatTransformNumber(currentModel.scale.z);
+
+  if (scaleInputMode === 'bounds') {
+    const sizeMeters = getCurrentBoundsSizeMeters();
+    ui.transformScaleX.value = formatTransformNumber(sizeMeters.x, 4);
+    ui.transformScaleY.value = formatTransformNumber(sizeMeters.y, 4);
+    ui.transformScaleZ.value = formatTransformNumber(sizeMeters.z, 4);
+  } else {
+    ui.transformScaleX.value = formatTransformNumber(currentModel.scale.x);
+    ui.transformScaleY.value = formatTransformNumber(currentModel.scale.y);
+    ui.transformScaleZ.value = formatTransformNumber(currentModel.scale.z);
+  }
 }
 
 function readFiniteInput(input, fallback) {
@@ -1124,18 +1211,23 @@ function applyTransformFields(changedInput = null) {
     currentModel.rotation.order,
   );
 
-  const minScale = 0.000001;
-  const nextScale = new THREE.Vector3(
-    Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleX, currentModel.scale.x))),
-    Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleY, currentModel.scale.y))),
-    Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleZ, currentModel.scale.z))),
-  );
-  if (unifiedScaleEnabled && [ui.transformScaleX, ui.transformScaleY, ui.transformScaleZ].includes(changedInput)) {
-    const value = changedInput === ui.transformScaleX ? nextScale.x
-      : changedInput === ui.transformScaleY ? nextScale.y : nextScale.z;
-    nextScale.set(value, value, value);
+  const scaleInputs = [ui.transformScaleX, ui.transformScaleY, ui.transformScaleZ];
+  if (scaleInputMode === 'bounds' && scaleInputs.includes(changedInput)) {
+    applyBoundsScaleInput(changedInput);
+  } else {
+    const minScale = 0.000001;
+    const nextScale = new THREE.Vector3(
+      Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleX, currentModel.scale.x))),
+      Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleY, currentModel.scale.y))),
+      Math.max(minScale, Math.abs(readFiniteInput(ui.transformScaleZ, currentModel.scale.z))),
+    );
+    if (unifiedScaleEnabled && scaleInputs.includes(changedInput)) {
+      const value = changedInput === ui.transformScaleX ? nextScale.x
+        : changedInput === ui.transformScaleY ? nextScale.y : nextScale.z;
+      nextScale.set(value, value, value);
+    }
+    currentModel.scale.copy(nextScale);
   }
-  currentModel.scale.copy(nextScale);
 
   currentModel.updateMatrixWorld(true);
   updateTransformFields();
@@ -2192,6 +2284,7 @@ ui.transformSpace.addEventListener('change', () => {
   syncTransformPivotProxy();
 });
 ui.transformPivot.addEventListener('change', () => setTransformPivotMode(ui.transformPivot.value));
+ui.scaleInputMode.addEventListener('change', () => setScaleInputMode(ui.scaleInputMode.value));
 ui.unifiedScaleToggle.addEventListener('change', () => setUnifiedScaleEnabled(ui.unifiedScaleToggle.checked));
 [
   ui.transformPositionX, ui.transformPositionY, ui.transformPositionZ,
@@ -2298,6 +2391,8 @@ window.addEventListener('keydown', (event) => {
     syncTransformPivotProxy();
   } else if (key === 'u' && glbTransformEnabled) {
     setUnifiedScaleEnabled(!unifiedScaleEnabled);
+  } else if (key === 'g' && glbTransformEnabled) {
+    startPrecisionAlign();
   } else if (event.key === 'Tab' && isGlbModel()) {
     event.preventDefault();
     setGlbTransformEnabled(!glbTransformEnabled);
