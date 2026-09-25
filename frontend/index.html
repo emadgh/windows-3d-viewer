@@ -177,8 +177,15 @@
               </div>
             </div>
 
-            <button id="resetTransformButton" type="button" class="transform-reset" disabled>Reset transform</button>
-            <div class="transform-note">Editing is available only for GLB files. Changes are in-memory in this version.</div>
+            <div class="transform-actions">
+              <button id="resetTransformButton" type="button" class="transform-reset" disabled>Reset transform</button>
+              <button id="saveGlbButton" type="button" class="primary transform-save">Save As GLB</button>
+            </div>
+            <div class="transform-footer">
+              <span>Source state</span>
+              <strong id="transformState">Original</strong>
+            </div>
+            <div class="transform-note">Save As creates a new GLB and keeps the original file unchanged.</div>
           </section>
 
           <section id="animationPanel" class="panel" hidden>
