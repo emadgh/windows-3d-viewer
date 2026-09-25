@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
@@ -67,6 +68,8 @@ const ui = {
   transformScaleY: document.querySelector('#transformScaleY'),
   transformScaleZ: document.querySelector('#transformScaleZ'),
   resetTransformButton: document.querySelector('#resetTransformButton'),
+  saveGlbButton: document.querySelector('#saveGlbButton'),
+  transformState: document.querySelector('#transformState'),
   emptyState: document.querySelector('#emptyState'),
   viewportBadge: document.querySelector('#viewportBadge'),
   modelName: document.querySelector('#modelName'),
@@ -124,6 +127,7 @@ transformControls.addEventListener('mouseUp', () => {
 });
 transformControls.addEventListener('objectChange', () => {
   updateTransformFields();
+  updateGlbTransformState();
   updateBoundsMeasurement();
 });
 
@@ -203,6 +207,7 @@ let lastModelBounds = null;
 let boundsVisible = false;
 let glbTransformEnabled = false;
 let originalGlbTransform = null;
+let glbExportInProgress = false;
 const clock = new THREE.Clock();
 
 manager.setURLModifier((url) => resolveLocalAsset(url));
@@ -545,6 +550,7 @@ function configureGlbTransformTools() {
   setTransformModeButtonState('translate');
   setGlbTransformEnabled(false);
   updateTransformFields();
+  updateGlbTransformState();
 }
 
 function setGlbTransformEnabled(enabled) {
@@ -611,6 +617,22 @@ function readFiniteInput(input, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function hasGlbTransformChanged() {
+  if (!isGlbModel() || !originalGlbTransform) return false;
+  const epsilon = 1e-7;
+  return currentModel.position.distanceToSquared(originalGlbTransform.position) > epsilon
+    || 1 - Math.abs(currentModel.quaternion.dot(originalGlbTransform.quaternion)) > epsilon
+    || currentModel.scale.distanceToSquared(originalGlbTransform.scale) > epsilon;
+}
+
+function updateGlbTransformState() {
+  if (!ui.transformState || !ui.saveGlbButton) return;
+  const changed = hasGlbTransformChanged();
+  ui.transformState.textContent = changed ? 'Modified' : 'Original';
+  ui.transformState.classList.toggle('modified', changed);
+  ui.saveGlbButton.disabled = !isGlbModel() || glbExportInProgress;
+}
+
 function applyTransformFields() {
   if (!glbTransformEnabled || !isGlbModel()) return;
 
@@ -636,6 +658,7 @@ function applyTransformFields() {
 
   currentModel.updateMatrixWorld(true);
   updateTransformFields();
+  updateGlbTransformState();
   updateBoundsMeasurement();
 }
 
@@ -646,7 +669,130 @@ function resetGlbTransform() {
   currentModel.scale.copy(originalGlbTransform.scale);
   currentModel.updateMatrixWorld(true);
   updateTransformFields();
+  updateGlbTransformState();
   updateBoundsMeasurement();
+}
+
+function collectGlbExportState() {
+  const helpers = [];
+  const materials = [];
+  const userData = [];
+
+  currentModel.traverse((node) => {
+    if (node.userData?.viewerHelper && node.parent) {
+      helpers.push({ node, parent: node.parent });
+      return;
+    }
+
+    if (node.isMesh) {
+      materials.push({ node, material: node.material });
+      if (node.userData?.viewerOriginalMaterial) node.material = node.userData.viewerOriginalMaterial;
+    }
+
+    if (node.userData) {
+      const viewerOriginalMaterial = node.userData.viewerOriginalMaterial;
+      const viewerMaterialVariants = node.userData.viewerMaterialVariants;
+      const viewerHelper = node.userData.viewerHelper;
+      if (viewerOriginalMaterial !== undefined || viewerMaterialVariants !== undefined || viewerHelper !== undefined) {
+        userData.push({ node, viewerOriginalMaterial, viewerMaterialVariants, viewerHelper });
+        delete node.userData.viewerOriginalMaterial;
+        delete node.userData.viewerMaterialVariants;
+        delete node.userData.viewerHelper;
+      }
+    }
+  });
+
+  for (const entry of helpers) entry.parent.remove(entry.node);
+  return { helpers, materials, userData };
+}
+
+function restoreGlbExportState(state) {
+  for (const entry of state.userData) {
+    if (entry.viewerOriginalMaterial !== undefined) entry.node.userData.viewerOriginalMaterial = entry.viewerOriginalMaterial;
+    if (entry.viewerMaterialVariants !== undefined) entry.node.userData.viewerMaterialVariants = entry.viewerMaterialVariants;
+    if (entry.viewerHelper !== undefined) entry.node.userData.viewerHelper = entry.viewerHelper;
+  }
+  for (const entry of state.materials) entry.node.material = entry.material;
+  for (const entry of state.helpers) entry.parent.add(entry.node);
+  updateWireOverlays();
+}
+
+async function saveBlobWithPicker(blob, suggestedName) {
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [{
+          description: 'Binary glTF',
+          accept: { 'model/gltf-binary': ['.glb'] },
+        }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true;
+    } catch (error) {
+      if (error?.name === 'AbortError') return false;
+      console.warn('Native save picker failed, falling back to browser download.', error);
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = suggestedName;
+    link.click();
+    return true;
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
+async function exportCurrentGlb() {
+  if (!isGlbModel() || glbExportInProgress) return;
+
+  glbExportInProgress = true;
+  const previousButtonText = ui.saveGlbButton.textContent;
+  ui.saveGlbButton.disabled = true;
+  ui.saveGlbButton.textContent = 'Exporting…';
+  setStatus('Exporting GLB…');
+
+  let exportState = null;
+  try {
+    exportState = collectGlbExportState();
+    currentModel.updateMatrixWorld(true);
+
+    const exporter = new GLTFExporter();
+    const result = await exporter.parseAsync(currentModel, {
+      binary: true,
+      trs: true,
+      onlyVisible: false,
+      animations: currentAnimations,
+    });
+
+    if (!(result instanceof ArrayBuffer)) throw new Error('GLB exporter did not return binary data.');
+
+    const blob = new Blob([result], { type: 'model/gltf-binary' });
+    const base = currentFileName.replace(/\.glb$/i, '') || 'model';
+    const outputName = `${base}-edited.glb`;
+    const saved = await saveBlobWithPicker(blob, outputName);
+
+    if (saved) {
+      setStatus(`${outputName} exported`);
+    } else {
+      setStatus('GLB export cancelled');
+    }
+  } catch (error) {
+    console.error('GLB export failed', error);
+    setStatus(`GLB export failed: ${error?.message || error}`, true);
+  } finally {
+    if (exportState) restoreGlbExportState(exportState);
+    glbExportInProgress = false;
+    ui.saveGlbButton.textContent = previousButtonText;
+    updateGlbTransformState();
+    updateBoundsMeasurement();
+  }
 }
 
 function getUnityMetersPerUnit() {
@@ -1135,6 +1281,7 @@ ui.transformSpace.addEventListener('change', () => {
   input.addEventListener('change', applyTransformFields);
 });
 ui.resetTransformButton.addEventListener('click', resetGlbTransform);
+ui.saveGlbButton.addEventListener('click', exportCurrentGlb);
 ui.autorotateToggle.addEventListener('change', () => {
   controls.autoRotate = ui.autorotateToggle.checked;
   controls.autoRotateSpeed = 1.2;

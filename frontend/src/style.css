@@ -531,11 +531,38 @@ svg { display: block; }
   color: #596577;
   opacity: .65;
 }
-.transform-reset {
-  width: 100%;
-  min-height: 29px;
+.transform-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
   margin-top: 10px;
+}
+.transform-reset,
+.transform-save {
+  width: 100%;
+  min-height: 30px;
+  margin: 0;
   font-size: 10.5px;
+}
+.transform-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255,255,255,.045);
+  border-radius: 7px;
+  background: rgba(3,7,12,.15);
+  color: #607087;
+  font-size: 9px;
+}
+.transform-footer strong {
+  color: #75849a;
+  font-size: 9px;
+  font-weight: 700;
+}
+.transform-footer strong.modified {
+  color: #f1bf73;
 }
 .transform-note {
   margin-top: 7px;
