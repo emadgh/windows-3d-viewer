@@ -2461,6 +2461,12 @@ window.addEventListener('keydown', (event) => {
 });
 
 let dragDepth = 0;
+
+window.__w3dvSetNativeDragState = (active) => {
+  dragDepth = 0;
+  ui.viewport.classList.toggle('dragging', Boolean(active));
+};
+
 window.addEventListener('dragenter', (event) => {
   event.preventDefault();
   dragDepth += 1;

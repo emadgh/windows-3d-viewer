@@ -108,6 +108,7 @@ enum UserEvent {
     Bridge(String),
     OpenFile(PathBuf),
     LaunchReady(Option<LaunchState>),
+    DragState(bool),
 }
 
 #[derive(Debug, Deserialize)]
@@ -1275,6 +1276,7 @@ fn run_app() -> Result<(), Box<dyn Error>> {
     let window = window_builder.build(&event_loop)?;
 
     let ipc_proxy = proxy.clone();
+    let drag_drop_proxy = proxy.clone();
     let builder = WebViewBuilder::new()
         .with_custom_protocol("w3dv".into(), |_webview_id, request| {
             asset_response(request.uri().path())
@@ -1282,6 +1284,24 @@ fn run_app() -> Result<(), Box<dyn Error>> {
         .with_initialization_script(BRIDGE_INIT_SCRIPT)
         .with_ipc_handler(move |request| {
             let _ = ipc_proxy.send_event(UserEvent::Bridge(request.body().clone()));
+        })
+        .with_drag_drop_handler(move |event| {
+            match event {
+                wry::DragDropEvent::Enter { .. } | wry::DragDropEvent::Over { .. } => {
+                    let _ = drag_drop_proxy.send_event(UserEvent::DragState(true));
+                }
+                wry::DragDropEvent::Leave => {
+                    let _ = drag_drop_proxy.send_event(UserEvent::DragState(false));
+                }
+                wry::DragDropEvent::Drop { paths, .. } => {
+                    let _ = drag_drop_proxy.send_event(UserEvent::DragState(false));
+                    if let Some(path) = paths.into_iter().find(|path| is_supported_model(path)) {
+                        let _ = drag_drop_proxy.send_event(UserEvent::OpenFile(path));
+                    }
+                }
+                _ => {}
+            }
+            true
         })
         .with_url("w3dv://localhost/index.html");
 
@@ -1351,6 +1371,14 @@ fn run_app() -> Result<(), Box<dyn Error>> {
                 let _ = webview.evaluate_script("window.__w3dvOpenNativeLaunchFile?.();");
             }
             Event::UserEvent(UserEvent::LaunchReady(None)) => {}
+            Event::UserEvent(UserEvent::DragState(active)) => {
+                let script = if active {
+                    "window.__w3dvSetNativeDragState?.(true);"
+                } else {
+                    "window.__w3dvSetNativeDragState?.(false);"
+                };
+                let _ = webview.evaluate_script(script);
+            }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
