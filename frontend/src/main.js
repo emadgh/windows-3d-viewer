@@ -303,6 +303,7 @@ let wireOverlayEnabled = false;
 let loadSessionSerial = 0;
 let activeModelSessionId = 0;
 let saveTargetSessionId = 0;
+let nativeSourceSessionId = 0;
 let pendingLoadSession = null;
 let currentAssetSession = null;
 let isolationTarget = null;
@@ -464,6 +465,7 @@ function invalidateCurrentSaveTarget() {
   currentGlbSaveHandle = null;
   currentGlbNativeSource = false;
   saveTargetSessionId = 0;
+  nativeSourceSessionId = 0;
 }
 
 async function loadFiles(fileList, options = {}) {
@@ -490,6 +492,7 @@ async function loadFiles(fileList, options = {}) {
     ? options.saveHandle
     : null;
   currentGlbNativeSource = Boolean(options.nativeSource && getExtension(primary.name) === 'glb');
+  nativeSourceSessionId = currentGlbNativeSource ? modelSessionId : 0;
   if (currentGlbSaveHandle || currentGlbNativeSource) saveTargetSessionId = modelSessionId;
   if (!options.nativeSource && window.zero?.invoke) {
     try {
@@ -500,7 +503,7 @@ async function loadFiles(fileList, options = {}) {
   }
 
   currentFileName = primary.name;
-  if (!currentGlbSaveHandle && getExtension(primary.name) === 'glb') {
+  if (!currentGlbSaveHandle && nativeSourceSessionId === modelSessionId) {
     await refreshNativeGlbSourceState(modelSessionId);
   }
   ui.modelName.textContent = primary.name;
@@ -1827,11 +1830,25 @@ async function runGlbSave(statusText, operation) {
 async function saveCurrentGlb() {
   if (!isGlbModel() || glbExportInProgress) return;
 
-  if (!currentGlbSaveHandle && !currentGlbNativeSource) {
-    await refreshNativeGlbSourceState();
+  const sessionId = activeModelSessionId;
+  if (saveTargetSessionId !== sessionId) {
+    currentGlbSaveHandle = null;
+    currentGlbNativeSource = false;
   }
 
-  if (!currentGlbSaveHandle && !currentGlbNativeSource) {
+  if (
+    !currentGlbSaveHandle
+    && !currentGlbNativeSource
+    && nativeSourceSessionId === sessionId
+  ) {
+    await refreshNativeGlbSourceState(sessionId);
+  }
+
+  if (
+    sessionId !== activeModelSessionId
+    || saveTargetSessionId !== sessionId
+    || (!currentGlbSaveHandle && !currentGlbNativeSource)
+  ) {
     setStatus('Save cannot overwrite this file because no writable source path is available. Use Save As once.', true);
     return;
   }
@@ -1846,6 +1863,10 @@ async function saveCurrentGlb() {
   await runGlbSave('Saving GLB…', async () => {
     const buffer = await createCurrentGlbBuffer();
     const blob = new Blob([buffer], { type: 'model/gltf-binary' });
+
+    if (sessionId !== activeModelSessionId || saveTargetSessionId !== sessionId) {
+      throw new Error('The active model changed before Save completed.');
+    }
 
     if (currentGlbSaveHandle) {
       await writeBlobToHandle(currentGlbSaveHandle, blob);
@@ -1883,6 +1904,8 @@ async function saveAsCurrentGlb() {
       await writeBlobToHandle(target.handle, blob);
       currentGlbSaveHandle = target.handle;
       currentGlbNativeSource = false;
+      nativeSourceSessionId = 0;
+      saveTargetSessionId = activeModelSessionId;
       if (window.zero?.invoke) {
         try {
           await window.zero.invoke('app.clearActiveSource', {});
