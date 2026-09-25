@@ -724,12 +724,11 @@ svg { display: block; }
 }
 .transform-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   margin-top: 10px;
 }
-.transform-reset,
-.transform-save {
+.transform-reset {
   width: 100%;
   min-height: 30px;
   margin: 0;
