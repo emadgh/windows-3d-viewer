@@ -1538,8 +1538,11 @@ function onResize() {
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  positionScalePersonReference();
+  if (precisionAlignActive) resetPrecisionAlignGuides();
 }
 
+controls.addEventListener('change', positionScalePersonReference);
 new ResizeObserver(onResize).observe(ui.viewport);
 onResize();
 
@@ -1583,6 +1586,7 @@ ui.boundsToggleButton.addEventListener('click', () => {
   ui.boundsToggleButton.setAttribute('aria-pressed', String(boundsVisible));
   updateBoundsMeasurement();
 });
+ui.scalePersonToggleButton.addEventListener('click', () => setScalePersonVisible(!scalePersonVisible));
 ui.transformEnabled.addEventListener('change', () => setGlbTransformEnabled(ui.transformEnabled.checked));
 ui.transformModeButtons.forEach((button) => {
   button.addEventListener('click', () => setTransformMode(button.dataset.transformMode));
@@ -1600,6 +1604,25 @@ ui.transformSpace.addEventListener('change', () => {
 });
 ui.resetTransformButton.addEventListener('click', resetGlbTransform);
 ui.saveGlbButton.addEventListener('click', exportCurrentGlb);
+ui.precisionAlignButton.addEventListener('click', startPrecisionAlign);
+ui.alignResetButton.addEventListener('click', resetPrecisionAlignGuides);
+ui.alignCancelButton.addEventListener('click', () => stopPrecisionAlign(true));
+ui.alignConfirmButton.addEventListener('click', applyPrecisionAlignment);
+
+[
+  [ui.alignX1, 'x', 'p1'],
+  [ui.alignX2, 'x', 'p2'],
+  [ui.alignY1, 'y', 'p1'],
+  [ui.alignY2, 'y', 'p2'],
+  [ui.alignXLine, 'x', 'line'],
+  [ui.alignYLine, 'y', 'line'],
+].forEach(([element, guideName, pointName]) => {
+  element.addEventListener('pointerdown', (event) => beginPrecisionDrag(event, guideName, pointName));
+});
+window.addEventListener('pointermove', updatePrecisionDrag);
+window.addEventListener('pointerup', endPrecisionDrag);
+window.addEventListener('pointercancel', endPrecisionDrag);
+
 ui.autorotateToggle.addEventListener('change', () => {
   controls.autoRotate = ui.autorotateToggle.checked;
   controls.autoRotateSpeed = 1.2;
@@ -1618,9 +1641,22 @@ ui.clearIsolationButton.addEventListener('click', () => clearIsolation());
 renderer.domElement.addEventListener('dblclick', handleDoubleClick);
 
 window.addEventListener('keydown', (event) => {
-  if (!glbTransformEnabled || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
   const tag = document.activeElement?.tagName?.toLowerCase();
   if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+
+  if (precisionAlignActive) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      stopPrecisionAlign(true);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      applyPrecisionAlignment();
+    }
+    return;
+  }
+
+  if (!glbTransformEnabled) return;
   if (event.key.toLowerCase() === 'w') setTransformMode('translate');
   else if (event.key.toLowerCase() === 'e') setTransformMode('rotate');
   else if (event.key.toLowerCase() === 'r') setTransformMode('scale');
