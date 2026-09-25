@@ -411,8 +411,8 @@ async function openWithFileSystemPicker() {
           'application/octet-stream': [
             '.glb', '.gltf', '.fbx', '.obj', '.mtl', '.stl', '.ply', '.dae',
             '.3mf', '.3ds', '.usdz', '.wrl', '.vrml', '.bin', '.tga', '.dds', '.ktx2',
+            '.png', '.jpg', '.jpeg', '.webp', '.bmp',
           ],
-          'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.bmp'],
         },
       }],
     });
