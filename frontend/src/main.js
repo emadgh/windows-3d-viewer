@@ -24,6 +24,47 @@ import { DDSLoader } from 'three/addons/loaders/DDSLoader.js';
 
 const MODEL_EXTENSIONS = new Set(['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply', 'dae', '3mf', '3ds', 'usdz', 'wrl', 'vrml']);
 const DEFAULT_CLAY_COLOR = '#787878';
+const TRANSFORM_PREFS_KEY = 'w3dv.transform.preferences.v1';
+const DEFAULT_TRANSFORM_PREFS = Object.freeze({
+  editEnabled: false,
+  mode: 'translate',
+  space: 'world',
+  pivot: 'bottom',
+  scaleInputMode: 'factor',
+  lockXYZ: true,
+});
+
+function loadTransformPreferences() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(TRANSFORM_PREFS_KEY) || '{}');
+    return {
+      editEnabled: Boolean(stored.editEnabled),
+      mode: ['translate', 'rotate', 'scale'].includes(stored.mode) ? stored.mode : DEFAULT_TRANSFORM_PREFS.mode,
+      space: ['local', 'world'].includes(stored.space) ? stored.space : DEFAULT_TRANSFORM_PREFS.space,
+      pivot: ['center', 'object', 'bottom'].includes(stored.pivot) ? stored.pivot : DEFAULT_TRANSFORM_PREFS.pivot,
+      scaleInputMode: ['factor', 'bounds'].includes(stored.scaleInputMode) ? stored.scaleInputMode : DEFAULT_TRANSFORM_PREFS.scaleInputMode,
+      lockXYZ: stored.lockXYZ === undefined ? DEFAULT_TRANSFORM_PREFS.lockXYZ : Boolean(stored.lockXYZ),
+    };
+  } catch (error) {
+    console.warn('Could not load transform preferences.', error);
+    return { ...DEFAULT_TRANSFORM_PREFS };
+  }
+}
+
+let transformPreferences = loadTransformPreferences();
+
+function saveTransformPreferences() {
+  try {
+    localStorage.setItem(TRANSFORM_PREFS_KEY, JSON.stringify(transformPreferences));
+  } catch (error) {
+    console.warn('Could not save transform preferences.', error);
+  }
+}
+
+function updateTransformPreference(key, value) {
+  transformPreferences = { ...transformPreferences, [key]: value };
+  saveTransformPreferences();
+}
 const modeLabels = {
   'textured-lighting': 'Textured + Lighting',
   textured: 'Textured',
@@ -260,6 +301,8 @@ let lightingEnabled = true;
 let shadowsEnabled = true;
 let wireOverlayEnabled = false;
 let loadSessionSerial = 0;
+let activeModelSessionId = 0;
+let saveTargetSessionId = 0;
 let pendingLoadSession = null;
 let currentAssetSession = null;
 let isolationTarget = null;
