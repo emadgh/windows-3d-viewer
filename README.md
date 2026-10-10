@@ -23,6 +23,10 @@ The distributable is a single `3D-Viewer.exe`. The production frontend, Draco de
 - Animation clip selection, play/pause, and restart
 - Mesh/vertex/triangle/animation statistics
 - PNG viewport screenshot
+- GLB transform editing and Reset XForm / Bake for static models: bake rotation and scale into geometry, make the selected center/bottom/object pivot the actual model origin, and preserve placement
+- Revert unsaved geometry and transforms, or persist the baked result with Save / Save As
+
+Reset XForm resets rotation to zero and scale to one throughout the static model hierarchy. The root position locates the chosen pivot in the scene. Skins, animation clips, instances, morph targets, embedded cameras, and lights are excluded from baking.
 
 ## Stack
 

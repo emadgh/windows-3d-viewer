@@ -6,3 +6,9 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
+frontend/public/basis/basis_transcoder.js
+frontend/public/basis/basis_transcoder.wasm
+frontend/public/basis/README.md
+frontend/public/draco/gltf/draco_decoder.js
+frontend/public/draco/gltf/draco_decoder.wasm
+frontend/public/draco/gltf/draco_wasm_wrapper.js

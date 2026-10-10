@@ -250,13 +250,14 @@
             </div>
 
             <div class="transform-actions">
-              <button id="resetTransformButton" type="button" class="transform-reset" disabled>Reset transform</button>
+              <button id="bakeTransformButton" type="button" class="transform-reset" disabled>Reset XForm / Bake</button>
+              <button id="resetTransformButton" type="button" class="transform-reset" disabled>Revert to saved</button>
             </div>
             <div class="transform-footer">
               <span>Source state</span>
               <strong id="transformState">Original</strong>
             </div>
-            <div class="transform-note">Save As creates a new GLB and keeps the original file unchanged.</div>
+            <div class="transform-note">Bake applies rotation and scale to static geometry and sets the selected pivot as the actual origin. Position is preserved. Save or Save As writes the result to GLB.</div>
           </section>
 
           <section id="animationPanel" class="panel" hidden>

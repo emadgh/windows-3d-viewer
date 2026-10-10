@@ -1,5 +1,6 @@
 import './style.css';
 import './startup-file.js';
+import { bakeStaticModel, getBakeUnavailableReason } from './bake-transform.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
@@ -117,6 +118,7 @@ const ui = {
   transformScaleY: document.querySelector('#transformScaleY'),
   transformScaleZ: document.querySelector('#transformScaleZ'),
   resetTransformButton: document.querySelector('#resetTransformButton'),
+  bakeTransformButton: document.querySelector('#bakeTransformButton'),
   saveButton: document.querySelector('#saveButton'),
   saveAsButton: document.querySelector('#saveAsButton'),
   transformState: document.querySelector('#transformState'),
@@ -313,6 +315,7 @@ let lastModelBounds = null;
 let boundsVisible = false;
 let glbTransformEnabled = false;
 let originalGlbTransform = null;
+let glbBakeHistory = [];
 let transformPivotMode = 'bottom';
 let unifiedScaleEnabled = true;
 let scaleInputMode = 'factor';
@@ -796,6 +799,7 @@ function clearCurrentModel() {
   setGlbTransformEnabled(false, false);
   ui.transformPanel.hidden = true;
   originalGlbTransform = null;
+  releaseGlbBakeHistory();
   clearIsolation();
   if (mixer) {
     mixer.stopAllAction();
@@ -1220,6 +1224,7 @@ function setGlbTransformEnabled(enabled, persist = true) {
     ui.transformScaleX, ui.transformScaleY, ui.transformScaleZ,
     ui.resetTransformButton,
   ].forEach((control) => { control.disabled = !glbTransformEnabled; });
+  updateGlbTransformState();
 }
 
 function setTransformModeButtonState(mode) {
@@ -1276,7 +1281,8 @@ function readFiniteInput(input, fallback) {
 function hasGlbTransformChanged() {
   if (!isGlbModel() || !originalGlbTransform) return false;
   const epsilon = 1e-7;
-  return currentModel.position.distanceToSquared(originalGlbTransform.position) > epsilon
+  return glbBakeHistory.length > 0
+    || currentModel.position.distanceToSquared(originalGlbTransform.position) > epsilon
     || 1 - Math.abs(currentModel.quaternion.dot(originalGlbTransform.quaternion)) > epsilon
     || currentModel.scale.distanceToSquared(originalGlbTransform.scale) > epsilon;
 }
@@ -1294,13 +1300,18 @@ function updateGlbTransformState() {
 
   ui.saveButton.disabled = !isGlb || busy || !hasOverwriteTarget;
   ui.saveAsButton.disabled = !isGlb || busy;
+  const bakeReason = getBakeUnavailableReason(currentModel, currentAnimations);
+  ui.bakeTransformButton.disabled = !isGlb || !glbTransformEnabled || busy || Boolean(bakeReason);
+  ui.bakeTransformButton.title = bakeReason || 'Bake rotation and scale into geometry and set the actual origin to the selected pivot';
+  ui.resetTransformButton.disabled = !isGlb || !glbTransformEnabled || busy;
+
   ui.saveButton.title = hasOverwriteTarget
     ? 'Save GLB · Ctrl+S'
     : 'Save unavailable until the file has a writable source. Use Save As once.';
 }
 
 function applyTransformFields(changedInput = null) {
-  if (!glbTransformEnabled || !isGlbModel()) return;
+  if (!glbTransformEnabled || !isGlbModel() || glbExportInProgress) return;
 
   currentModel.position.set(
     readFiniteInput(ui.transformPositionX, currentModel.position.x),
@@ -1340,16 +1351,61 @@ function applyTransformFields(changedInput = null) {
   refreshScalePersonAnchor();
 }
 
+function releaseGlbBakeHistory() {
+  for (const bake of glbBakeHistory) bake.releaseOriginals();
+  glbBakeHistory = [];
+}
+
+function rebuildModelWireOverlays() {
+  const overlays = [];
+  currentModel.traverse((node) => {
+    if (node.name === '__viewer_wire_overlay__' && node.userData?.viewerHelper) overlays.push(node);
+  });
+  for (const overlay of overlays) {
+    overlay.removeFromParent();
+    overlay.geometry.dispose();
+  }
+  currentModel.traverse((node) => {
+    if (node.isMesh && !node.userData?.viewerHelper) addWireOverlay(node);
+  });
+  updateWireOverlays();
+}
+
+function refreshBakedModel() {
+  rebuildModelWireOverlays();
+  syncTransformPivotProxy();
+  updateTransformFields();
+  updateGlbTransformState();
+  updateBoundsMeasurement();
+  updateStageFromModel();
+  refreshScalePersonAnchor();
+}
+
+function bakeGlbTransform() {
+  if (!glbTransformEnabled || !isGlbModel() || glbExportInProgress) return;
+  if (precisionAlignActive) stopPrecisionAlign(true);
+  finishTransformProxyDrag();
+  try {
+    glbBakeHistory.push(bakeStaticModel(currentModel, getTransformPivotWorldPosition(), currentAnimations));
+    refreshBakedModel();
+    setStatus('Reset XForm applied · rotation 0, scale 1 · selected pivot baked · Save to keep changes');
+  } catch (error) {
+    setStatus(`Reset XForm failed: ${error.message}`, true);
+  }
+}
+
 function resetGlbTransform() {
-  if (!isGlbModel() || !originalGlbTransform) return;
+  if (!isGlbModel() || !originalGlbTransform || glbExportInProgress) return;
+  if (precisionAlignActive) stopPrecisionAlign(true);
+  finishTransformProxyDrag();
+  for (const bake of glbBakeHistory.reverse()) bake.restore();
+  glbBakeHistory = [];
   currentModel.position.copy(originalGlbTransform.position);
   currentModel.quaternion.copy(originalGlbTransform.quaternion);
   currentModel.scale.copy(originalGlbTransform.scale);
   currentModel.updateMatrixWorld(true);
-  updateTransformFields();
-  updateGlbTransformState();
-  updateBoundsMeasurement();
-  refreshScalePersonAnchor();
+  refreshBakedModel();
+  setStatus('Restored geometry and transforms to the last saved state');
 }
 
 function getPrecisionViewportSize() {
@@ -1733,6 +1789,7 @@ async function createCurrentGlbBuffer() {
 
 function markCurrentGlbSaved(fileName = null) {
   if (!isGlbModel()) return;
+  releaseGlbBakeHistory();
   originalGlbTransform = {
     position: currentModel.position.clone(),
     quaternion: currentModel.quaternion.clone(),
@@ -2453,6 +2510,7 @@ ui.unifiedScaleToggle.addEventListener('change', () => setUnifiedScaleEnabled(ui
   input.addEventListener('change', () => applyTransformFields(input));
 });
 ui.resetTransformButton.addEventListener('click', resetGlbTransform);
+ui.bakeTransformButton.addEventListener('click', bakeGlbTransform);
 ui.saveButton.addEventListener('click', saveCurrentGlb);
 ui.saveAsButton.addEventListener('click', saveAsCurrentGlb);
 ui.precisionAlignButton.addEventListener('click', startPrecisionAlign);
