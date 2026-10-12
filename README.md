@@ -15,7 +15,9 @@ The distributable is a single `3D-Viewer.exe`. The production frontend, Draco de
 - glTF Draco, Meshopt, and KTX2/Basis decoding
 - Left-mouse orbit, middle-mouse pan, Alt + middle-mouse drag zoom, mouse-wheel zoom, damping, fit, reset, and double-click focus
 - Hold right mouse for flight: WASD moves along camera forward/right, E/Q moves along camera up/down, and mouse movement looks around. Release right mouse to return to orbit; viewer shortcuts are suspended during flight.
-- Display modes: Textured + Lighting, Textured (unlit), Clay, Wireframe
+- View presets: Textures only, Baked lighting (textures + vertex colors / AO / lightmaps), and Lit materials
+- Independent vertex-color, baked-map, viewer-lighting and shadow layers, plus Vertex colors, Clay and Wireframe inspection views
+- Compact File, Camera, View and Scene menus with keyboard access
 - Independent wireframe overlay toggle
 - Default environment/key/fill lighting with lighting toggle
 - Soft shadows with shadow toggle

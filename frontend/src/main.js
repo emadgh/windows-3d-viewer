@@ -4,6 +4,7 @@ import { bakeStaticModel, getBakeUnavailableReason } from './bake-transform.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FlyControls } from './fly-controls.js';
+import { makeRenderMaterial, renderMaterialKey, VIEW_MODES, VIEW_PRESETS } from './render-materials.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -68,8 +69,8 @@ function updateTransformPreference(key, value) {
   saveTransformPreferences();
 }
 const modeLabels = {
-  'textured-lighting': 'Textured + Lighting',
-  textured: 'Textured',
+  textured: 'Textured materials',
+  'vertex-colors': 'Vertex colors',
   clay: 'Clay',
   wireframe: 'Wireframe',
 };
@@ -87,6 +88,11 @@ const ui = {
   settingsModal: document.querySelector('#settingsModal'),
   closeSettingsButton: document.querySelector('#closeSettingsButton'),
   modeSelect: document.querySelector('#modeSelect'),
+  viewSummary: document.querySelector('#viewSummary'),
+  vertexColorsToggle: document.querySelector('#vertexColorsToggle'),
+  bakedMapsToggle: document.querySelector('#bakedMapsToggle'),
+  vertexColorInfo: document.querySelector('#vertexColorInfo'),
+  viewPresetButtons: Array.from(document.querySelectorAll('[data-view-preset]')),
   clayColorControl: document.querySelector('#clayColorControl'),
   clayColor: document.querySelector('#clayColor'),
   lightingToggle: document.querySelector('#lightingToggle'),
@@ -301,7 +307,9 @@ let mixer = null;
 let activeAction = null;
 let animationPlaying = false;
 let currentFileName = '';
-let currentMode = 'textured-lighting';
+let currentMode = 'textured';
+let vertexColorsEnabled = true;
+let bakedMapsEnabled = true;
 let clayColor = DEFAULT_CLAY_COLOR;
 let lightingEnabled = true;
 let shadowsEnabled = true;
@@ -841,6 +849,7 @@ function clearCurrentModel() {
   renderer.renderLists.dispose();
   ui.saveButton.disabled = true;
   ui.saveAsButton.disabled = true;
+  updateViewControls();
 }
 
 function disposeModelResources(root) {
@@ -2157,89 +2166,110 @@ function fromArrayLikeOriginal(original, values) {
   return Array.isArray(original) ? values : values[0];
 }
 
-function makeMaterialVariant(source, mode) {
-  if (mode === 'textured') {
-    return new THREE.MeshBasicMaterial({
-      color: source?.color?.clone?.() || new THREE.Color(0xffffff),
-      map: source?.map || null,
-      alphaMap: source?.alphaMap || null,
-      aoMap: source?.aoMap || null,
-      vertexColors: Boolean(source?.vertexColors),
-      transparent: Boolean(source?.transparent),
-      opacity: source?.opacity ?? 1,
-      alphaTest: source?.alphaTest ?? 0,
-      side: source?.side ?? THREE.FrontSide,
-      depthWrite: source?.depthWrite ?? true,
-    });
-  }
-
-  if (mode === 'clay') {
-    return new THREE.MeshStandardMaterial({
-      color: clayColor,
-      roughness: 0.78,
-      metalness: 0.02,
-      side: source?.side ?? THREE.FrontSide,
-      vertexColors: false,
-    });
-  }
-
-  return new THREE.MeshBasicMaterial({
-    color: 0x151b22,
-    wireframe: true,
-    transparent: false,
-    side: THREE.DoubleSide,
-  });
+function getRenderOptions() {
+  return { mode: currentMode, lighting: lightingEnabled, vertexColors: vertexColorsEnabled, bakedMaps: bakedMapsEnabled };
 }
 
-function materialForMode(mesh, mode) {
+function materialForMode(mesh) {
   const original = mesh.userData.viewerOriginalMaterial || mesh.material;
-  if (mode === 'textured-lighting') return original;
+  const options = getRenderOptions();
+  const key = renderMaterialKey(options);
   const cache = mesh.userData.viewerMaterialVariants || (mesh.userData.viewerMaterialVariants = {});
-  if (!cache[mode]) {
-    cache[mode] = fromArrayLikeOriginal(original, toArray(original).map((material) => makeMaterialVariant(material, mode)));
+  if (!cache[key]) {
+    cache[key] = fromArrayLikeOriginal(original, toArray(original).map((material) => makeRenderMaterial(material, {
+      ...options, hasVertexColors: Boolean(mesh.geometry?.attributes.color), clayColor,
+    })));
   }
-  return cache[mode];
+  return cache[key];
+}
+
+function updateViewControls() {
+  const textured = currentMode === 'textured';
+  ui.modeSelect.value = currentMode;
+  ui.clayColorControl.hidden = currentMode !== 'clay';
+  ui.lightingToggle.checked = lightingEnabled;
+  ui.lightingToggle.disabled = !textured && currentMode !== 'clay';
+  ui.vertexColorsToggle.checked = currentMode === 'vertex-colors' || vertexColorsEnabled;
+  ui.vertexColorsToggle.disabled = !textured;
+  ui.bakedMapsToggle.checked = bakedMapsEnabled;
+  ui.bakedMapsToggle.disabled = !textured;
+  ui.shadowsToggle.disabled = !effectiveLightingEnabled();
+  const label = textured
+    ? (lightingEnabled ? 'Lit materials' : vertexColorsEnabled || bakedMapsEnabled ? 'Baked lighting' : 'Textures only')
+    : modeLabels[currentMode];
+  ui.viewSummary.textContent = label;
+  for (const button of ui.viewPresetButtons) {
+    const preset = VIEW_PRESETS[button.dataset.viewPreset];
+    const active = Object.entries(preset).every(([key, value]) => getRenderOptions()[key] === value);
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+  let withColors = 0;
+  let meshes = 0;
+  currentModel?.traverse((node) => {
+    if (!node.isMesh || node.userData.viewerHelper) return;
+    meshes += 1;
+    if (node.geometry?.attributes.color) withColors += 1;
+  });
+  ui.vertexColorInfo.textContent = currentModel
+    ? (withColors ? `${withColors} of ${meshes} meshes have vertex colors. Missing colors appear gray in Vertex colors view.` : 'No vertex colors in this model.')
+    : 'Open a model to inspect its vertex colors.';
+  if (currentModel) ui.viewportBadge.textContent = label;
+}
+
+function effectiveLightingEnabled() {
+  return lightingEnabled && (currentMode === 'textured' || currentMode === 'clay');
 }
 
 function applyRenderMode(mode) {
+  if (!VIEW_MODES.includes(mode)) return;
   currentMode = mode;
-  ui.modeSelect.value = mode;
-  ui.clayColorControl.hidden = mode !== 'clay';
-  if (!currentModel) return;
-  currentModel.traverse((child) => {
+  currentModel?.traverse((child) => {
     if (!child.isMesh || child.userData.viewerHelper) return;
-    child.material = materialForMode(child, mode);
+    child.material = materialForMode(child);
   });
+  applyLighting();
   updateWireOverlays();
-  ui.viewportBadge.textContent = modeLabels[mode] || mode;
+  updateViewControls();
+}
+
+function applyViewPreset(name) {
+  const preset = VIEW_PRESETS[name];
+  if (!preset) return;
+  lightingEnabled = preset.lighting;
+  vertexColorsEnabled = preset.vertexColors;
+  bakedMapsEnabled = preset.bakedMaps;
+  applyRenderMode(preset.mode);
 }
 
 function applyClayColor(value) {
   clayColor = value;
   currentModel?.traverse((child) => {
-    if (!child.isMesh || child.userData.viewerHelper) return;
-    const clayVariant = child.userData.viewerMaterialVariants?.clay;
-    if (!clayVariant) return;
-    toArray(clayVariant).forEach((material) => material.color?.set(clayColor));
+    if (!child.isMesh) return;
+    for (const [key, material] of Object.entries(child.userData.viewerMaterialVariants || {})) {
+      if (key.startsWith('clay:')) toArray(material).forEach((entry) => entry.color?.set(clayColor));
+    }
   });
 }
 
 function applyLighting() {
-  hemisphere.visible = lightingEnabled;
-  keyLight.visible = lightingEnabled;
-  fillLight.visible = lightingEnabled;
-  scene.environment = lightingEnabled ? environmentTexture : null;
+  const enabled = effectiveLightingEnabled();
+  hemisphere.visible = enabled;
+  keyLight.visible = enabled;
+  fillLight.visible = enabled;
+  scene.environment = enabled ? environmentTexture : null;
   applyShadows();
 }
 
 function applyShadows() {
-  renderer.shadowMap.enabled = shadowsEnabled;
-  keyLight.castShadow = shadowsEnabled && lightingEnabled;
-  ground.visible = shadowsEnabled && lightingEnabled && Boolean(currentModel);
+  const enabled = shadowsEnabled && effectiveLightingEnabled();
+  renderer.shadowMap.enabled = enabled;
+  keyLight.castShadow = enabled;
+  ground.visible = enabled && Boolean(currentModel);
   currentModel?.traverse((child) => {
     if (child.isMesh && !child.userData.viewerHelper) {
-      child.castShadow = shadowsEnabled;
-      child.receiveShadow = shadowsEnabled;
+      child.castShadow = enabled;
+      child.receiveShadow = enabled;
     }
   });
 }
@@ -2452,6 +2482,28 @@ const flyControls = new FlyControls(camera, controls, renderer.domElement, {
       : 'Left: orbit · Middle: pan · Alt + middle: zoom · Hold right: fly (WASD + Q/E)';
   },
 });
+const toolbarMenus = Array.from(document.querySelectorAll('.toolbar-menu'));
+for (const menu of toolbarMenus) {
+  menu.addEventListener('toggle', () => {
+    if (menu.open) for (const other of toolbarMenus) if (other !== menu) other.open = false;
+  });
+  menu.addEventListener('click', (event) => {
+    if (event.target.closest('[data-menu-action]')) menu.open = false;
+  });
+}
+window.addEventListener('pointerdown', (event) => {
+  for (const menu of toolbarMenus) if (!menu.contains(event.target)) menu.open = false;
+}, true);
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  const menu = toolbarMenus.find((entry) => entry.open);
+  if (menu) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    menu.open = false;
+    menu.querySelector('summary').focus();
+  }
+}, true);
 controls.addEventListener('change', positionScalePersonReference);
 new ResizeObserver(onResize).observe(ui.viewport);
 onResize();
@@ -2498,9 +2550,20 @@ ui.resetButton.addEventListener('click', resetCamera);
 ui.screenshotButton.addEventListener('click', takeScreenshot);
 ui.modeSelect.addEventListener('change', () => applyRenderMode(ui.modeSelect.value));
 ui.clayColor.addEventListener('input', () => applyClayColor(ui.clayColor.value));
+ui.vertexColorsToggle.addEventListener('change', () => {
+  vertexColorsEnabled = ui.vertexColorsToggle.checked;
+  applyRenderMode(currentMode);
+});
+ui.bakedMapsToggle.addEventListener('change', () => {
+  bakedMapsEnabled = ui.bakedMapsToggle.checked;
+  applyRenderMode(currentMode);
+});
+ui.viewPresetButtons.forEach((button) => {
+  button.addEventListener('click', () => applyViewPreset(button.dataset.viewPreset));
+});
 ui.lightingToggle.addEventListener('change', () => {
   lightingEnabled = ui.lightingToggle.checked;
-  applyLighting();
+  applyRenderMode(currentMode);
 });
 ui.shadowsToggle.addEventListener('change', () => {
   shadowsEnabled = ui.shadowsToggle.checked;
@@ -2575,13 +2638,13 @@ ui.clearIsolationButton.addEventListener('click', () => clearIsolation());
 renderer.domElement.addEventListener('dblclick', handleDoubleClick);
 
 function toggleCheckboxControl(input) {
-  if (!input) return;
+  if (!input || input.disabled) return;
   input.checked = !input.checked;
   input.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 function cycleViewMode() {
-  const modes = ['textured-lighting', 'textured', 'clay', 'wireframe'];
+  const modes = VIEW_MODES;
   const index = modes.indexOf(currentMode);
   applyRenderMode(modes[(index + 1) % modes.length]);
 }
@@ -2610,7 +2673,7 @@ window.addEventListener('keydown', (event) => {
     }
     return;
   }
-  if (event.altKey || editingField) return;
+  if (event.altKey || editingField || toolbarMenus.some((menu) => menu.open)) return;
 
   if (precisionAlignActive) {
     if (event.key === 'Escape') {
@@ -2683,4 +2746,5 @@ window.addEventListener('beforeunload', () => {
   }
 });
 
+updateViewControls();
 setStatus('Ready');
