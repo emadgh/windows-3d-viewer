@@ -59,17 +59,29 @@ jobs:
           Write-Host "Single Rust EXE verified: $($exe.Path)"
           Write-Host "Size: $((Get-Item $exe).Length) bytes"
 
+      - name: Configure independent startup smoke tests
+        shell: pwsh
+        run: |
+          # Each smoke test must launch its own process, rather than forwarding
+          # to a previous instance while Windows is still releasing its handles.
+          $settingsPath = 'HKCU:\Software\EmadGH\Windows3DViewer\Settings'
+          New-Item -Path $settingsPath -Force | Out-Null
+          New-ItemProperty -Path $settingsPath -Name 'SingleInstance' -Value 0 -PropertyType DWord -Force | Out-Null
+
       - name: Smoke test standalone EXE
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Get-Process -Name '3D-Viewer' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name '3D-Viewer' -ErrorAction SilentlyContinue | ForEach-Object {
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            $_.WaitForExit()
+          }
 
           $errorLog = Join-Path $env:LOCALAPPDATA 'Windows3DViewer/startup-error.log'
           if (Test-Path $errorLog) { Remove-Item $errorLog -Force }
 
           $exe = Resolve-Path 'dist/3D-Viewer.exe'
-          $process = Start-Process -FilePath $exe -WorkingDirectory $env:RUNNER_TEMP -PassThru
+          $process = Start-Process -FilePath $exe -WorkingDirectory $env:RUNNER_TEMP -WindowStyle Hidden -PassThru
           Start-Sleep -Seconds 8
           $process.Refresh()
 
@@ -86,13 +98,17 @@ jobs:
           }
 
           Stop-Process -Id $process.Id -Force
+          $process.WaitForExit()
           Write-Host 'Standalone Rust EXE stayed running from an unrelated working directory.'
 
       - name: Smoke test model argument
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Get-Process -Name '3D-Viewer' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name '3D-Viewer' -ErrorAction SilentlyContinue | ForEach-Object {
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            $_.WaitForExit()
+          }
 
           $sampleDir = Join-Path $env:RUNNER_TEMP 'windows-3d-viewer-rust-sample'
           if (Test-Path $sampleDir) { Remove-Item $sampleDir -Recurse -Force }
@@ -114,7 +130,7 @@ jobs:
           if (Test-Path $errorLog) { Remove-Item $errorLog -Force }
 
           $exe = Resolve-Path 'dist/3D-Viewer.exe'
-          $process = Start-Process -FilePath $exe -ArgumentList ('"' + $sample + '"') -WorkingDirectory $env:RUNNER_TEMP -PassThru
+          $process = Start-Process -FilePath $exe -ArgumentList ('"' + $sample + '"') -WorkingDirectory $env:RUNNER_TEMP -WindowStyle Hidden -PassThru
           Start-Sleep -Seconds 8
           $process.Refresh()
 
@@ -131,6 +147,7 @@ jobs:
           }
 
           Stop-Process -Id $process.Id -Force
+          $process.WaitForExit()
           Write-Host 'Model-argument smoke test passed.'
 
       - name: Generate SHA-256 checksum
