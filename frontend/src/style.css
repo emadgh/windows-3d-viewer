@@ -927,3 +927,20 @@ kbd { padding: 3px 6px; border: 1px solid rgba(255,255,255,.08); border-bottom-c
   .mode-control select { min-width: 122px; max-width: 122px; }
   .empty-card { width: min(440px, calc(100% - 16px)); padding: 28px 26px 25px; }
 }
+
+.navigation-hint {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 13px;
+  max-width: calc(100% - 26px);
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: rgba(10, 14, 20, .68);
+  color: #9ba8b9;
+  font-size: 10px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+.viewport.flying .navigation-hint { color: #b9dfff; }
+.viewport:has(.precision-align-overlay:not([hidden])) .navigation-hint { display: none; }

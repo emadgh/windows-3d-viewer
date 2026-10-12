@@ -13,7 +13,8 @@ The distributable is a single `3D-Viewer.exe`. The production frontend, Draco de
 - Multi-file loading for external textures, `.bin`, and `.mtl` dependencies
 - Formats: GLB, GLTF, FBX, OBJ/MTL, STL, PLY, DAE, 3MF, 3DS, USDZ, VRML/WRL
 - glTF Draco, Meshopt, and KTX2/Basis decoding
-- Fluid orbit camera with damping, pan, zoom, fit, reset, and double-click focus
+- Left-mouse orbit, middle-mouse pan, Alt + middle-mouse drag zoom, mouse-wheel zoom, damping, fit, reset, and double-click focus
+- Hold right mouse for flight: WASD moves along camera forward/right, E/Q moves along camera up/down, and mouse movement looks around. Release right mouse to return to orbit; viewer shortcuts are suspended during flight.
 - Display modes: Textured + Lighting, Textured (unlit), Clay, Wireframe
 - Independent wireframe overlay toggle
 - Default environment/key/fill lighting with lighting toggle

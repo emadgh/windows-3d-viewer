@@ -3,6 +3,7 @@ import './startup-file.js';
 import { bakeStaticModel, getBakeUnavailableReason } from './bake-transform.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FlyControls } from './fly-controls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -75,6 +76,7 @@ const modeLabels = {
 
 const ui = {
   viewport: document.querySelector('#viewport'),
+  navigationHint: document.querySelector('#navigationHint'),
   openButton: document.querySelector('#openButton'),
   emptyOpenButton: document.querySelector('#emptyOpenButton'),
   fileInput: document.querySelector('#fileInput'),
@@ -181,6 +183,8 @@ controls.rotateSpeed = 0.62;
 controls.zoomSpeed = 0.85;
 controls.panSpeed = 0.72;
 controls.screenSpacePanning = true;
+controls.touches.ONE = THREE.TOUCH.PAN;
+controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
 controls.target.set(0, 0, 0);
 controls.update();
 
@@ -793,6 +797,7 @@ function addWireOverlay(mesh) {
 }
 
 function clearCurrentModel() {
+  flyControls.stop();
   if (precisionAlignActive) stopPrecisionAlign(false);
   scalePersonAnchor = null;
   scalePersonSprite.visible = false;
@@ -1613,6 +1618,7 @@ function renderPrecisionAlignGuides(sampleSurface = false, dragging = false) {
 }
 
 function startPrecisionAlign() {
+  flyControls.stop();
   if (!glbTransformEnabled || !isGlbModel()) return;
   precisionAlignActive = true;
   precisionSurfaceSample = null;
@@ -2105,6 +2111,7 @@ function updateStageFromModel() {
 }
 
 function fitObject(object, preserveDirection = true) {
+  flyControls.stop();
   if (!object) return;
   const box = new THREE.Box3().setFromObject(object);
   if (box.isEmpty()) return;
@@ -2133,6 +2140,7 @@ function fitObject(object, preserveDirection = true) {
 }
 
 function resetCamera() {
+  flyControls.stop();
   if (currentModel) fitObject(currentModel, false);
   else {
     camera.position.set(3.2, 2.3, 4.2);
@@ -2429,6 +2437,21 @@ function onResize() {
   if (precisionAlignActive) resetPrecisionAlignGuides();
 }
 
+const flyControls = new FlyControls(camera, controls, renderer.domElement, {
+  canStart: () => !precisionAlignActive && !transformControls.dragging && ui.settingsModal.hidden,
+  getSpeed: () => {
+    const size = currentModel ? new THREE.Box3().setFromObject(currentModel, true).getSize(new THREE.Vector3()).length() : 0;
+    return Math.max(size * 0.5 || camera.position.distanceTo(controls.target) * 0.5, 0.001);
+  },
+  onChange: positionScalePersonReference,
+  onActiveChange: (active) => {
+    transformControls.enabled = !active;
+    ui.viewport.classList.toggle('flying', active);
+    ui.navigationHint.textContent = active
+      ? 'Flying · WASD move · Q/E camera down/up · release right mouse to orbit'
+      : 'Left: orbit · Middle: pan · Alt + middle: zoom · Hold right: fly (WASD + Q/E)';
+  },
+});
 controls.addEventListener('change', positionScalePersonReference);
 new ResizeObserver(onResize).observe(ui.viewport);
 onResize();
@@ -2437,12 +2460,14 @@ function animate() {
   requestAnimationFrame(animate);
   const delta = Math.min(clock.getDelta(), 0.05);
   if (mixer && animationPlaying) mixer.update(delta);
-  controls.update();
+  if (flyControls.active) flyControls.update(delta);
+  else controls.update();
   renderer.render(scene, camera);
 }
 animate();
 
 function openSettingsModal(focusUpdater = false) {
+  flyControls.stop();
   if (!ui.settingsModal) return;
   ui.settingsModal.hidden = false;
   window.dispatchEvent(new CustomEvent('w3dv:settings-open', { detail: { focusUpdater } }));
@@ -2562,6 +2587,7 @@ function cycleViewMode() {
 }
 
 window.addEventListener('keydown', (event) => {
+  if (flyControls.active) return;
   if (event.key === 'Escape' && ui.settingsModal && !ui.settingsModal.hidden) {
     event.preventDefault();
     closeSettingsModal();
@@ -2650,6 +2676,7 @@ window.addEventListener('drop', async (event) => {
   if (event.dataTransfer?.files?.length) await loadFiles(event.dataTransfer.files);
 });
 window.addEventListener('beforeunload', () => {
+  flyControls.dispose();
   if (pendingLoadSession) disposeAssetSession(pendingLoadSession);
   if (currentAssetSession && currentAssetSession !== pendingLoadSession) {
     disposeAssetSession(currentAssetSession);

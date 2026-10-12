@@ -40,6 +40,10 @@ jobs:
         shell: pwsh
         run: ./scripts/build-windows.ps1
 
+      - name: Test camera controls and GLB baking
+        shell: pwsh
+        run: npm test --prefix frontend
+
       - name: Verify single-file output
         shell: pwsh
         run: |
